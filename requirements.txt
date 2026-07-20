@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+httpx
+psycopg[binary]
+psycopg-pool
+python-dotenv
+geopandas

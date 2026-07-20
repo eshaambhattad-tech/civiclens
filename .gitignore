@@ -1,0 +1,11 @@
+.env
+.mcp.json
+__pycache__/
+*.pyc
+.venv/
+data/
+*.zip
+*.shp
+*.dbf
+*.shx
+*.prj

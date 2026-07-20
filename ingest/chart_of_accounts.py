@@ -1,0 +1,135 @@
+"""IL Comptroller AFR Chart of Accounts — code → human label mappings.
+
+Source: FY2025 Comptroller Connect Chart of Accounts (chartofaccountss.pdf).
+"""
+
+FUND_LABELS = {
+    "GN": "General",
+    "SR": "Special Revenue",
+    "CP": "Capital Projects",
+    "DS": "Debt Service",
+    "EP": "Enterprise",
+    "TS": "Trust & Agency",
+    "FD": "Fiduciary",
+    "DP": "Depreciation",
+    "OT": "Other",
+}
+
+REVENUE_LABELS = {
+    "201": "Property Tax",
+    "202": "Sales Tax",
+    "203": "Utility Tax",
+    "203a": "Utility Tax - Electricity",
+    "203b": "Utility Tax - Natural Gas",
+    "203c": "Utility Tax - Telephone",
+    "203d": "Utility Tax - Other",
+    "204": "Other Taxes",
+    "205": "Gaming Income",
+    "211": "State Income Tax",
+    "212": "State Sales Tax",
+    "213": "State Motor Fuel Tax",
+    "214": "State Replacement Tax",
+    "215": "Other State Sources",
+    "215a": "State - General Support",
+    "215b": "State - Public Welfare",
+    "215c": "State - Highways/Streets",
+    "215d": "State - Health/Hospitals",
+    "215e": "State - Police/Corrections",
+    "215f": "State - Housing/Community Dev",
+    "215g": "State - Water Supply",
+    "215h": "State - Electric/Gas Power",
+    "215i": "State - Mass Transit",
+    "215j": "State - Other",
+    "225": "Federal Sources",
+    "225a": "Federal - General Support",
+    "225b": "Federal - Public Welfare",
+    "225c": "Federal - Highways/Streets",
+    "225d": "Federal - Health/Hospitals",
+    "225e": "Federal - Police/Corrections",
+    "225f": "Federal - Housing/Community Dev",
+    "225g": "Federal - Water Supply",
+    "225h": "Federal - Electric/Gas Power",
+    "225i": "Federal - Mass Transit",
+    "225j": "Federal - Other",
+    "226": "Other Intergovernmental",
+    "231": "Licenses & Permits",
+    "233": "Fines & Forfeitures",
+    "234": "Charges for Services",
+    "234a": "Charges - Water Utilities",
+    "234b": "Charges - Sewer",
+    "234c": "Charges - Sanitation",
+    "234d": "Charges - Electric/Gas",
+    "234e": "Charges - Transportation",
+    "234f": "Charges - Health/Hospitals",
+    "234g": "Charges - Parking",
+    "234h": "Charges - Housing",
+    "234i": "Charges - Highway/Bridge Tolls",
+    "234j": "Charges - Culture & Recreation",
+    "234k": "Charges - Other",
+    "235": "Interest Income",
+    "236": "Other Revenue",
+}
+
+EXPENDITURE_LABELS = {
+    "251": "General Government",
+    "251a": "General Government - Legislative",
+    "251b": "General Government - Financial Admin",
+    "251c": "General Government - Other Admin",
+    "251d": "General Government - Buildings",
+    "252": "Public Safety",
+    "252a": "Public Safety - Police",
+    "252b": "Public Safety - Fire",
+    "252c": "Public Safety - Building Inspection",
+    "252d": "Public Safety - Other",
+    "254": "Judiciary & Legal",
+    "255": "Transportation",
+    "255a": "Transportation - Highways/Streets",
+    "255b": "Transportation - Parking",
+    "255c": "Transportation - Air",
+    "255d": "Transportation - Mass Transit",
+    "255e": "Transportation - Other",
+    "256": "Social Services",
+    "256a": "Social Services - Welfare",
+    "256b": "Social Services - Health",
+    "256c": "Social Services - Hospitals",
+    "256d": "Social Services - Public Housing",
+    "256e": "Social Services - Other",
+    "257": "Culture & Recreation",
+    "257a": "Culture & Recreation - Libraries",
+    "257b": "Culture & Recreation - Parks",
+    "257c": "Culture & Recreation - Other",
+    "258": "Community Development",
+    "259": "Debt Service",
+    "259a": "Debt Service - Interest",
+    "259b": "Debt Service - Principal",
+    "260": "Contingencies",
+    "271": "Public Utility Operations",
+    "271a": "Utility Ops - Water",
+    "271b": "Utility Ops - Electric",
+    "271d": "Utility Ops - Mass Transit",
+    "272": "Non-Programmed Charges",
+    "275": "Environment",
+    "275a": "Environment - Sewerage",
+    "275b": "Environment - Solid Waste",
+    "275c": "Environment - Other",
+    "280": "Other Expenditures",
+}
+
+FUND_BALANCE_LABELS = {
+    "302": "Unrestricted Fund Balance",
+    "303": "Restricted Fund Balance",
+    "304": "Committed Fund Balance",
+    "305": "Assigned Fund Balance",
+    "307": "Total Fund Balance",
+    "308": "Total Fund Balance - Enterprise/Internal",
+}
+
+
+def label_category(code, is_revenue=True):
+    base = code.rstrip("t")
+    table = REVENUE_LABELS if is_revenue else EXPENDITURE_LABELS
+    return table.get(base, base)
+
+
+def label_fund(col):
+    return FUND_LABELS.get(col, col)

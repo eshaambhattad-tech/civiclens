@@ -1,0 +1,31 @@
+{
+  "type": "FeatureCollection",
+  "note": "FIXTURE DATA — approximate bounding boxes, not real TIGER boundaries. Replace via tiger_loader.py with real shapefiles.",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"id": "cook-county", "name": "Cook County", "type": "county", "population": 5087072},
+      "geometry": {"type": "MultiPolygon", "coordinates": [[[[-88.30, 41.45], [-87.50, 41.45], [-87.50, 42.20], [-88.30, 42.20], [-88.30, 41.45]]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"id": "cook-northfield-township", "name": "Northfield Township", "type": "township", "population": 85102},
+      "geometry": {"type": "MultiPolygon", "coordinates": [[[[-87.90, 42.05], [-87.74, 42.05], [-87.74, 42.15], [-87.90, 42.15], [-87.90, 42.05]]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"id": "cook-maine-township", "name": "Maine Township", "type": "township", "population": 135772},
+      "geometry": {"type": "MultiPolygon", "coordinates": [[[[-87.96, 41.98], [-87.80, 41.98], [-87.80, 42.05], [-87.96, 42.05], [-87.96, 41.98]]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"id": "cook-wheeling-township", "name": "Wheeling Township", "type": "township", "population": 152109},
+      "geometry": {"type": "MultiPolygon", "coordinates": [[[[-88.05, 42.05], [-87.90, 42.05], [-87.90, 42.15], [-88.05, 42.15], [-88.05, 42.05]]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"id": "cook-glenview", "name": "Glenview", "type": "municipality", "population": 48705},
+      "geometry": {"type": "MultiPolygon", "coordinates": [[[[-87.86, 42.06], [-87.76, 42.06], [-87.76, 42.11], [-87.86, 42.11], [-87.86, 42.06]]]]}
+    }
+  ]
+}
