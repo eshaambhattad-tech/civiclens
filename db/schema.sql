@@ -26,6 +26,7 @@ create table if not exists documents (
   extracted_text text,
   pages          int
 );
+create unique index if not exists documents_url_idx on documents (url);
 
 create table if not exists officials (
   id         serial primary key,
