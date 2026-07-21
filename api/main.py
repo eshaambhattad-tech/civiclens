@@ -163,6 +163,41 @@ async def list_units(request: Request, type: str = None, query: str = None, limi
     return {"units": rows}
 
 
+@app.get("/units/geojson")
+async def units_geojson(request: Request, type: str = None):
+    sql = """
+        select id, name, type, population, website,
+               ST_AsGeoJSON(geom)::json as geometry,
+               (select max(fiscal_year) from afr_summaries a where a.unit_id = units.id) as latest_fy,
+               (select count(*) from officials o where o.unit_id = units.id) as officials_count
+        from units where geom is not null
+    """
+    params = []
+    if type:
+        sql += " and type = %s"
+        params.append(type)
+    sql += " order by name"
+    async with pool.connection() as conn:
+        rows = await (await conn.execute(sql, params)).fetchall()
+    features = []
+    for r in rows:
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "id": r["id"],
+                "name": r["name"],
+                "unit_type": r["type"],
+                "population": r["population"],
+                "website": r["website"],
+                "latest_fy": r["latest_fy"],
+                "officials_count": r["officials_count"],
+            },
+            "geometry": r["geometry"],
+        })
+    await log_usage(request, "units_geojson", params={"type": type})
+    return {"type": "FeatureCollection", "features": features}
+
+
 @app.get("/units/{unit_id}")
 async def get_unit(request: Request, unit_id: str):
     async with pool.connection() as conn:
@@ -284,41 +319,6 @@ async def compare_units(request: Request, unit_ids: str = Query(..., description
         "provenance": provenance(COMPTROLLER_URL, fiscal_year or "latest per unit",
                                  note="AFR data is self-reported; fiscal years may differ across units."),
     }
-
-
-@app.get("/units/geojson")
-async def units_geojson(request: Request, type: str = None):
-    sql = """
-        select id, name, type, population, website,
-               ST_AsGeoJSON(geom)::json as geometry,
-               (select max(fiscal_year) from afr_summaries a where a.unit_id = units.id) as latest_fy,
-               (select count(*) from officials o where o.unit_id = units.id) as officials_count
-        from units where geom is not null
-    """
-    params = []
-    if type:
-        sql += " and type = %s"
-        params.append(type)
-    sql += " order by name"
-    async with pool.connection() as conn:
-        rows = await (await conn.execute(sql, params)).fetchall()
-    features = []
-    for r in rows:
-        features.append({
-            "type": "Feature",
-            "properties": {
-                "id": r["id"],
-                "name": r["name"],
-                "unit_type": r["type"],
-                "population": r["population"],
-                "website": r["website"],
-                "latest_fy": r["latest_fy"],
-                "officials_count": r["officials_count"],
-            },
-            "geometry": r["geometry"],
-        })
-    await log_usage(request, "units_geojson", params={"type": type})
-    return {"type": "FeatureCollection", "features": features}
 
 
 @app.get("/freshness")

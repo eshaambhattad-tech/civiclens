@@ -45,6 +45,8 @@ export default function ComparePage() {
   const [results, setResults] = useState<Result[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [unitsLoading, setUnitsLoading] = useState(true);
+  const [unitsError, setUnitsError] = useState(false);
+  const [compareError, setCompareError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [searchFilter, setSearchFilter] = useState("");
 
@@ -55,12 +57,18 @@ export default function ComparePage() {
   // Load all townships on mount
   useEffect(() => {
     fetch(`${API_BASE}/units?type=township&limit=100`)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`API ${r.status}`);
+        return r.json();
+      })
       .then((data) => {
         setAllUnits(data.units || []);
         setUnitsLoading(false);
       })
-      .catch(() => setUnitsLoading(false));
+      .catch(() => {
+        setUnitsError(true);
+        setUnitsLoading(false);
+      });
   }, []);
 
   // GSAP entrance
@@ -103,14 +111,19 @@ export default function ComparePage() {
   async function compare() {
     if (selected.length < 2) return;
     setLoading(true);
+    setCompareError(null);
     try {
       const res = await fetch(
         `${API_BASE}/compare?unit_ids=${selected.join(",")}&metric=${metric}`
       );
+      if (!res.ok) throw new Error(`API returned ${res.status}`);
       const data = await res.json();
       setResults(data.results || []);
-    } catch {
+    } catch (e) {
       setResults(null);
+      setCompareError(
+        e instanceof Error ? e.message : "Failed to compare. Is the API running?"
+      );
     }
     setLoading(false);
   }
@@ -196,7 +209,12 @@ export default function ComparePage() {
                   </div>
 
                   <div className="max-h-56 overflow-y-auto">
-                    {unitsLoading ? (
+                    {unitsError ? (
+                      <div className="px-4 py-6 text-center text-sm text-red-600">
+                        Could not load townships. Make sure the API is running
+                        at {API_BASE}
+                      </div>
+                    ) : unitsLoading ? (
                       <div className="px-4 py-6 text-center text-sm text-muted">
                         Loading townships...
                       </div>
@@ -340,6 +358,13 @@ export default function ComparePage() {
           </button>
         </div>
       </div>
+
+      {/* Error */}
+      {compareError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6 text-sm text-red-700">
+          {compareError}
+        </div>
+      )}
 
       {/* Results */}
       <AnimatePresence mode="wait">
