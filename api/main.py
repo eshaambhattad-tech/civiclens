@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from psycopg_pool import AsyncConnectionPool
 from psycopg.rows import dict_row
 
@@ -31,6 +32,7 @@ async def lifespan(app):
 
 
 app = FastAPI(title="CivicLens Cook County", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 async def log_usage(request: Request, tool: str, unit_id: str = None, params: dict = None):
@@ -264,7 +266,8 @@ async def compare_units(request: Request, unit_ids: str = Query(..., description
                 (uid, fiscal_year, fiscal_year),
             )).fetchone()
             if not row:
-                results.append({"unit_id": uid, "value": None, "note": "no AFR data"})
+                name_row = await (await conn.execute("select name from units where id = %s", (uid,))).fetchone()
+                results.append({"unit_id": uid, "name": name_row["name"] if name_row else uid, "fiscal_year": None, "value": None, "note": "no AFR data"})
                 continue
             if metric == "per_capita_expenditures":
                 val = round(float(row["total_expenditures"]) / row["population"], 2) \
@@ -281,6 +284,41 @@ async def compare_units(request: Request, unit_ids: str = Query(..., description
         "provenance": provenance(COMPTROLLER_URL, fiscal_year or "latest per unit",
                                  note="AFR data is self-reported; fiscal years may differ across units."),
     }
+
+
+@app.get("/units/geojson")
+async def units_geojson(request: Request, type: str = None):
+    sql = """
+        select id, name, type, population, website,
+               ST_AsGeoJSON(geom)::json as geometry,
+               (select max(fiscal_year) from afr_summaries a where a.unit_id = units.id) as latest_fy,
+               (select count(*) from officials o where o.unit_id = units.id) as officials_count
+        from units where geom is not null
+    """
+    params = []
+    if type:
+        sql += " and type = %s"
+        params.append(type)
+    sql += " order by name"
+    async with pool.connection() as conn:
+        rows = await (await conn.execute(sql, params)).fetchall()
+    features = []
+    for r in rows:
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "id": r["id"],
+                "name": r["name"],
+                "unit_type": r["type"],
+                "population": r["population"],
+                "website": r["website"],
+                "latest_fy": r["latest_fy"],
+                "officials_count": r["officials_count"],
+            },
+            "geometry": r["geometry"],
+        })
+    await log_usage(request, "units_geojson", params={"type": type})
+    return {"type": "FeatureCollection", "features": features}
 
 
 @app.get("/freshness")
