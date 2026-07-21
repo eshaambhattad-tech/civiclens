@@ -437,11 +437,12 @@ def top_vendors(unit_id: str, fiscal_year: int = None, n: int = 10) -> dict:
         sql += " group by 1 order by 2 desc limit %s"
         params.append(n)
         rows = conn.execute(sql, params).fetchall()
-        total_spend = conn.execute(
-            "select sum(amount) from spend_lines where unit_id = %s" +
+        total_row = conn.execute(
+            "select sum(amount) as total from spend_lines where unit_id = %s" +
             (" and extract(year from meeting_date) = %s" if fiscal_year else ""),
             params[:2] if fiscal_year else params[:1],
-        ).fetchone()[0]
+        ).fetchone()
+        total_spend = total_row["total"] if total_row else None
     if not rows:
         return error_response("NO_SPEND_DETAIL",
                               f"No warrant-level spend data for '{unit_id}'.",

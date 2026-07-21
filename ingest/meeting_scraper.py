@@ -224,10 +224,11 @@ def scrape_custom_php(source):
             continue
         if date not in seen_dates:
             seen_dates[date] = {"date": date, "agenda_url": None, "minutes_url": None}
-        link_lower = link.lower()
-        if "minute" in link_lower:
+        # use filename only to avoid false matches from path like "Agenda & Minutes/"
+        filename = link.rsplit("/", 1)[-1].lower()
+        if "minute" in filename:
             seen_dates[date]["minutes_url"] = full_url
-        elif "agenda" in link_lower or "packet" in link_lower:
+        elif "agenda" in filename or "packet" in filename:
             seen_dates[date]["agenda_url"] = full_url
 
     for d, info in sorted(seen_dates.items()):
