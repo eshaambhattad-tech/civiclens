@@ -41,6 +41,12 @@ TOWNSHIP_SOURCES = [
         "base_url": "https://leydentownship.com",
         "agenda_path": "/AgendaCenter",
     },
+    {
+        "unit_id": "cook-palos-township",
+        "type": "civicplus",
+        "base_url": "https://palostownship.org",
+        "agenda_path": "/AgendaCenter",
+    },
     # WordPress PDF sites
     {
         "unit_id": "cook-schaumburg-township",
@@ -56,6 +62,11 @@ TOWNSHIP_SOURCES = [
         "unit_id": "cook-thornton-township",
         "type": "wordpress",
         "url": "https://thorntontownship.com/agendas-notices-minutes/",
+    },
+    {
+        "unit_id": "cook-worth-township",
+        "type": "wordpress",
+        "url": "https://worthtownship.com/meeting-agendas-minutes/",
     },
     # Custom PHP
     {
@@ -272,7 +283,7 @@ def save_meetings(meetings, dry_run=False):
             )
             row = conn.execute("select id from documents where url = %s", (m["agenda_url"],)).fetchone()
             if row:
-                agenda_doc_id = row[0]
+                agenda_doc_id = row["id"]
 
         minutes_doc_id = None
         if m.get("minutes_url"):
@@ -282,7 +293,7 @@ def save_meetings(meetings, dry_run=False):
             )
             row = conn.execute("select id from documents where url = %s", (m["minutes_url"],)).fetchone()
             if row:
-                minutes_doc_id = row[0]
+                minutes_doc_id = row["id"]
 
         existing = conn.execute(
             "select id from meetings where unit_id = %s and meeting_ts = %s",
@@ -291,7 +302,7 @@ def save_meetings(meetings, dry_run=False):
         if existing:
             conn.execute(
                 "update meetings set status=%s, agenda_doc_id=%s, minutes_doc_id=%s where id=%s",
-                (m["status"], agenda_doc_id, minutes_doc_id, existing[0]),
+                (m["status"], agenda_doc_id, minutes_doc_id, existing["id"]),
             )
         else:
             conn.execute(
