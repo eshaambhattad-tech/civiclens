@@ -8,7 +8,7 @@ load_dotenv()
 
 def connect():
     url = os.environ["DATABASE_URL"]
-    return psycopg.connect(url)
+    return psycopg.connect(url, row_factory=psycopg.rows.dict_row)
 
 
 def apply_schema(conn):

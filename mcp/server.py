@@ -12,9 +12,11 @@ Runs over stdio (default) or streamable-http.
 import datetime as dt
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
+import time
 
 import httpx
 import psycopg
@@ -22,6 +24,14 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
+
+log = logging.getLogger("civiclens")
+
+VALID_METRICS = {"total_expenditures", "per_capita_expenditures", "fund_balance", "debt", "ga_spend"}
+DB_STATEMENT_TIMEOUT_MS = 10_000  # 10 s — kill any query that runs longer
+DB_POOL_TIMEOUT_S = 5  # max wait for a connection from the pool
+GEOCODER_RETRIES = 3
+GEOCODER_TIMEOUT_S = 10
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -43,16 +53,20 @@ mcp = FastMCP(
 _pool = ConnectionPool(
     os.environ["DATABASE_URL"],
     min_size=1, max_size=5, max_idle=300,
+    timeout=DB_POOL_TIMEOUT_S,
     check=ConnectionPool.check_connection,
-    kwargs={"row_factory": dict_row},
+    kwargs={
+        "row_factory": dict_row,
+        "options": f"-c statement_timeout={DB_STATEMENT_TIMEOUT_MS}",
+    },
 )
 
-# geocode cache: normalized address hash → {matched_address, lat, lng}
 _geocode_cache: dict[str, dict] = {}
 
 
 def get_conn():
-    return _pool.connection()
+    """Get a connection from the pool.  Raises PoolTimeout after DB_POOL_TIMEOUT_S."""
+    return _pool.connection(timeout=DB_POOL_TIMEOUT_S)
 
 
 def log_usage(tool: str, unit_id: str = None, params: dict = None):
@@ -85,47 +99,111 @@ def error_response(code, message, suggestion):
     }
 
 
+def coverage_level(officials: int, afr_years: int, spend: int, meetings: int) -> str:
+    if officials > 0 and afr_years > 0 and spend > 0 and meetings > 0:
+        return "full"
+    if officials > 0 and afr_years > 0 and meetings > 0:
+        return "rich"
+    if officials > 0 and afr_years > 0:
+        return "core"
+    if afr_years > 0 or officials > 0:
+        return "partial"
+    return "boundary_only"
+
+
+COVERAGE_DESCRIPTIONS = {
+    "full": "Officials, finances, line-item spending, and meeting data available.",
+    "rich": "Officials, finances, and meeting data available. No line-item spending.",
+    "core": "Officials and finances available. No meeting or spending detail.",
+    "partial": "Limited data — only officials or finances loaded, not both.",
+    "boundary_only": "Geographic boundary only — no financial, official, or meeting data yet.",
+}
+
+
 def _normalize_address(address: str) -> str:
     return re.sub(r"\s+", " ", address.strip().upper())
 
 
-def geocode(address: str):
+def geocode(address: str) -> dict | None:
+    """Geocode an address via memory cache → DB cache → Census API (with retry).
+
+    Returns {"matched_address", "lat", "lng"} or None if the address is
+    genuinely unmatched.  Raises RuntimeError if the geocoder is unreachable
+    after retries so callers can surface a clear message.
+    """
     key = _normalize_address(address)
     if key in _geocode_cache:
         return _geocode_cache[key]
 
-    # check DB cache
+    # DB cache
     addr_hash = hashlib.sha256(key.encode()).hexdigest()[:32]
-    with get_conn() as conn:
-        row = conn.execute(
-            "select matched_address, lat, lng from geocode_cache where addr_hash = %s",
-            (addr_hash,),
-        ).fetchone()
-    if row:
-        result = {"matched_address": row["matched_address"], "lat": row["lat"], "lng": row["lng"]}
-        _geocode_cache[key] = result
-        return result
-
     try:
-        r = httpx.get(GEOCODER, params={"address": address, "benchmark": "Public_AR_Current", "format": "json"}, timeout=15)
-        r.raise_for_status()
-        matches = r.json()["result"]["addressMatches"]
-    except Exception:
-        return None
+        with get_conn() as conn:
+            row = conn.execute(
+                "select matched_address, lat, lng from geocode_cache where addr_hash = %s",
+                (addr_hash,),
+            ).fetchone()
+        if row:
+            result = {"matched_address": row["matched_address"], "lat": row["lat"], "lng": row["lng"]}
+            _geocode_cache[key] = result
+            return result
+    except Exception as exc:
+        log.warning("geocode DB cache lookup failed: %s", exc)
+
+    # Census API with retry + backoff
+    last_exc = None
+    for attempt in range(1, GEOCODER_RETRIES + 1):
+        try:
+            r = httpx.get(
+                GEOCODER,
+                params={"address": address, "benchmark": "Public_AR_Current", "format": "json"},
+                timeout=GEOCODER_TIMEOUT_S,
+            )
+            r.raise_for_status()
+            matches = r.json()["result"]["addressMatches"]
+            break  # success
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            last_exc = exc
+            if attempt < GEOCODER_RETRIES:
+                backoff = 1.5 ** attempt
+                log.warning("Geocoder attempt %d/%d failed (%s), retrying in %.1fs",
+                            attempt, GEOCODER_RETRIES, exc, backoff)
+                time.sleep(backoff)
+        except httpx.HTTPStatusError as exc:
+            last_exc = exc
+            if attempt < GEOCODER_RETRIES and exc.response.status_code >= 500:
+                time.sleep(1.5 ** attempt)
+            else:
+                raise RuntimeError(
+                    f"Census geocoder returned HTTP {exc.response.status_code}. "
+                    "This is an upstream issue — try again in a few minutes."
+                ) from exc
+        except Exception as exc:
+            raise RuntimeError(
+                f"Census geocoder returned unexpected data: {exc}"
+            ) from exc
+    else:
+        raise RuntimeError(
+            f"Census geocoder unreachable after {GEOCODER_RETRIES} attempts "
+            f"(last error: {last_exc}). The service may be down — try again in a few minutes."
+        )
+
     if not matches:
         return None
+
     m = matches[0]
     result = {"matched_address": m["matchedAddress"], "lat": m["coordinates"]["y"], "lng": m["coordinates"]["x"]}
 
-    # persist to DB
+    # persist to DB cache (best-effort)
     try:
         with get_conn() as conn:
             conn.execute(
-                "insert into geocode_cache (addr_hash, input_address, matched_address, lat, lng) values (%s,%s,%s,%s,%s) on conflict do nothing",
+                "insert into geocode_cache (addr_hash, input_address, matched_address, lat, lng) "
+                "values (%s,%s,%s,%s,%s) on conflict do nothing",
                 (addr_hash, address, result["matched_address"], result["lat"], result["lng"]),
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("geocode cache write failed: %s", exc)
 
     _geocode_cache[key] = result
     return result
@@ -183,7 +261,11 @@ def find_my_governments(address: str) -> dict:
 
     Example: find_my_governments("1225 Waukegan Rd, Glenview, IL")
     """
-    loc = geocode(address)
+    try:
+        loc = geocode(address)
+    except RuntimeError as exc:
+        return error_response("GEOCODER_UNAVAILABLE", str(exc),
+                              "The Census geocoder may be down. Try again in a few minutes.")
     if not loc:
         return error_response("ADDRESS_NOT_FOUND",
                               f"Census geocoder found no match for '{address}'.",
@@ -191,9 +273,12 @@ def find_my_governments(address: str) -> dict:
     with get_conn() as conn:
         rows = conn.execute(
             """
-            select u.id, u.name, u.type, u.as_of,
+            select u.id, u.name, u.type, u.as_of, u.population,
                    (select count(*) from officials o where o.unit_id = u.id) as officials_count,
+                   (select count(*) from afr_summaries a where a.unit_id = u.id) as afr_years,
                    (select max(fiscal_year) from afr_summaries a where a.unit_id = u.id) as latest_fy,
+                   (select count(*) from spend_lines s where s.unit_id = u.id) as spend_lines,
+                   (select count(*) from meetings m where m.unit_id = u.id) as meetings_count,
                    (select min(meeting_ts) from meetings m where m.unit_id = u.id and m.meeting_ts > now()) as next_meeting
             from units u
             where ST_Contains(u.geom, ST_SetSRID(ST_Point(%s, %s), 4326))
@@ -201,6 +286,10 @@ def find_my_governments(address: str) -> dict:
             """,
             (loc["lng"], loc["lat"]),
         ).fetchall()
+    for r in rows:
+        level = coverage_level(r["officials_count"], r["afr_years"], r["spend_lines"], r["meetings_count"])
+        r["coverage_level"] = level
+        r["coverage_note"] = COVERAGE_DESCRIPTIONS[level]
     log_usage("find_my_governments", params={"address": address})
     return serialize({
         "matched_address": loc["matched_address"],
@@ -251,9 +340,10 @@ def get_unit(unit_id: str) -> dict:
             """
             select id, name, type, county, website, fy_start, population, ioc_code,
                    agenda_platform, as_of,
-                   exists(select 1 from spend_lines s where s.unit_id = units.id) as has_spend_detail,
-                   exists(select 1 from meetings m where m.unit_id = units.id) as has_meetings,
+                   (select count(*) from spend_lines s where s.unit_id = units.id) as spend_line_count,
+                   (select count(*) from meetings m where m.unit_id = units.id) as meetings_count,
                    (select count(*) from officials o where o.unit_id = units.id) as officials_count,
+                   (select count(*) from afr_summaries a where a.unit_id = units.id) as afr_years,
                    (select max(fiscal_year) from afr_summaries a where a.unit_id = units.id) as latest_afr_year,
                    (select filed_on_time from afr_summaries a where a.unit_id = units.id
                     order by fiscal_year desc limit 1) as latest_afr_filed_on_time
@@ -264,6 +354,11 @@ def get_unit(unit_id: str) -> dict:
     if not u:
         return error_response("UNIT_NOT_FOUND", f"No unit '{unit_id}'.",
                               "Use list_units to find valid unit ids.")
+    level = coverage_level(u["officials_count"], u["afr_years"], u["spend_line_count"], u["meetings_count"])
+    u["coverage_level"] = level
+    u["coverage_note"] = COVERAGE_DESCRIPTIONS[level]
+    u["has_spend_detail"] = u["spend_line_count"] > 0
+    u["has_meetings"] = u["meetings_count"] > 0
     log_usage("get_unit", unit_id=unit_id)
     u["provenance"] = provenance(u.get("website") or COMPTROLLER_URL, u["as_of"])
     return serialize(u)
@@ -289,10 +384,14 @@ def get_officials(unit_id: str) -> dict:
                order by case role when 'supervisor' then 0 when 'clerk' then 1 else 2 end, role, name""",
             (unit_id,),
         ).fetchall()
-    if not rows:
-        return error_response("NO_OFFICIALS", f"No officials on file for '{unit_id}'.",
-                              "Officials are loaded for townships only in v1; check data_freshness.")
     log_usage("get_officials", unit_id=unit_id)
+    if not rows:
+        return serialize({
+            "unit_id": unit_id,
+            "officials": [],
+            "note": "No officials on file. Officials data is currently loaded for townships only.",
+            "provenance": provenance(note="No officials data for this unit."),
+        })
     return serialize({
         "unit_id": unit_id,
         "officials": rows,
@@ -336,15 +435,21 @@ def get_finances(unit_id: str, fiscal_year: int = None, years_back: int = 1) -> 
         return error_response("NO_FINANCES", f"No AFR data on file for '{unit_id}'.",
                               "AFR filings lag a year or more; check data_freshness.")
     pop = u["population"]
+    caveats = ["AFR data is self-reported by the government and may contain filing errors."]
     for r in rows:
         if pop and r["total_expenditures"] is not None:
             r["per_capita_expenditures"] = round(float(r["total_expenditures"]) / pop, 2)
         if pop and r["total_revenues"] is not None:
             r["per_capita_revenues"] = round(float(r["total_revenues"]) / pop, 2)
+        if not pop:
+            caveats.append(f"No population data — per-capita figures unavailable for FY{r['fiscal_year']}.")
+        if r.get("filed_on_time") is False:
+            caveats.append(f"FY{r['fiscal_year']} AFR was filed late, which may indicate data quality issues.")
     log_usage("get_finances", unit_id=unit_id, params={"fiscal_year": fiscal_year})
     return serialize({
         "unit_id": unit_id,
         "years": rows,
+        "caveats": list(dict.fromkeys(caveats)),
         "provenance": provenance(
             rows[0]["source_url"], f"FY{rows[0]['fiscal_year']}",
             note="Self-reported Annual Financial Report data; may contain filing errors."),
@@ -403,11 +508,14 @@ def get_spending_detail(
         sql += " order by amount desc limit %s"
         params.append(limit)
         rows = conn.execute(sql, params).fetchall()
-    if not rows:
-        return error_response("NO_SPEND_DETAIL",
-                              f"No warrant-level spend data for '{unit_id}'.",
-                              "Warrant data exists only for instrumented units. Use get_finances for AFR-level summaries.")
     log_usage("get_spending_detail", unit_id=unit_id, params={"fiscal_year": fiscal_year, "vendor": vendor})
+    if not rows:
+        return serialize({
+            "unit_id": unit_id,
+            "lines": [],
+            "note": "No warrant-level spend data for this unit. Warrant data exists only for instrumented units. Use get_finances for AFR-level summaries.",
+            "provenance": provenance(note="No spend data available."),
+        })
     return serialize({"unit_id": unit_id, "lines": rows,
                       "provenance": provenance(COMPTROLLER_URL, rows[0].get("meeting_date"), certainty="extracted")})
 
@@ -444,9 +552,13 @@ def top_vendors(unit_id: str, fiscal_year: int = None, n: int = 10) -> dict:
         ).fetchone()
         total_spend = total_row["total"] if total_row else None
     if not rows:
-        return error_response("NO_SPEND_DETAIL",
-                              f"No warrant-level spend data for '{unit_id}'.",
-                              "Use get_finances for AFR-level summaries.")
+        return serialize({
+            "unit_id": unit_id,
+            "total_tracked_spend": None,
+            "vendors": [],
+            "note": "No warrant-level spend data for this unit. Use get_finances for AFR-level summaries.",
+            "provenance": provenance(note="No spend data available."),
+        })
     for r in rows:
         if total_spend:
             r["pct_of_total"] = round(float(r["total"]) / float(total_spend) * 100, 1)
@@ -470,6 +582,10 @@ def compare_units(unit_ids: list[str], metric: str, fiscal_year: int = None) -> 
     if not ids:
         return error_response("MISSING_PARAM", "No valid unit IDs provided.",
                               "Use list_units to find valid unit ids, then pass as a list.")
+    if metric not in VALID_METRICS:
+        return error_response("INVALID_METRIC",
+                              f"Unknown metric '{metric}'.",
+                              f"Valid metrics: {', '.join(sorted(VALID_METRICS))}")
     col = {"debt": "total_debt"}.get(metric, metric)
     results = []
     with get_conn() as conn:
@@ -485,7 +601,9 @@ def compare_units(unit_ids: list[str], metric: str, fiscal_year: int = None) -> 
                 (uid, fiscal_year, fiscal_year),
             ).fetchone()
             if not row:
-                results.append({"unit_id": uid, "value": None, "note": "no AFR data"})
+                name_row = conn.execute("select name from units where id = %s", (uid,)).fetchone()
+                results.append({"unit_id": uid, "name": name_row["name"] if name_row else uid,
+                                "fiscal_year": None, "value": None, "note": "no AFR data"})
                 continue
             if metric == "per_capita_expenditures":
                 val = round(float(row["total_expenditures"]) / row["population"], 2) \
@@ -495,10 +613,26 @@ def compare_units(unit_ids: list[str], metric: str, fiscal_year: int = None) -> 
             else:
                 val = row.get(col)
             results.append({"unit_id": uid, "name": row["name"], "fiscal_year": row["fiscal_year"], "value": val})
+    caveats = ["AFR data is self-reported by each government and may contain filing errors."]
+    fiscal_years = {r["fiscal_year"] for r in results if r.get("fiscal_year")}
+    if len(fiscal_years) > 1:
+        fy_list = ", ".join(f"FY{fy}" for fy in sorted(fiscal_years))
+        caveats.append(
+            f"WARNING: These units are reporting different fiscal years ({fy_list}). "
+            "Direct comparison may be misleading — consider filtering to a single fiscal_year."
+        )
+    missing = [r["name"] for r in results if r.get("value") is None]
+    if missing:
+        caveats.append(f"No data available for: {', '.join(missing)}.")
+    if metric == "per_capita_expenditures":
+        no_pop = [r["name"] for r in results if r.get("value") is None and r.get("fiscal_year")]
+        if no_pop:
+            caveats.append(f"Per-capita calculation requires population data, which is missing for some units.")
     log_usage("compare_units", params={"unit_ids": ids, "metric": metric})
     return serialize({
         "metric": metric,
         "results": results,
+        "caveats": caveats,
         "provenance": provenance(
             COMPTROLLER_URL, fiscal_year or "latest per unit",
             note="AFR data is self-reported; fiscal years may differ across units."),
@@ -519,7 +653,11 @@ def upcoming_meetings(unit_id: str = None, address: str = None, days_ahead: int 
 
     unit_ids = []
     if address:
-        loc = geocode(address)
+        try:
+            loc = geocode(address)
+        except RuntimeError as exc:
+            return error_response("GEOCODER_UNAVAILABLE", str(exc),
+                                  "The Census geocoder may be down. Try again in a few minutes.")
         if not loc:
             return error_response("ADDRESS_NOT_FOUND",
                                   f"Census geocoder found no match for '{address}'.",
