@@ -37,6 +37,7 @@ create table if not exists officials (
   phone      text,
   term_end   date,
   certainty  text not null check (certainty in ('verified','extracted','stale_risk')),
+  photo_url  text,
   source_url text not null,
   as_of      date not null
 );

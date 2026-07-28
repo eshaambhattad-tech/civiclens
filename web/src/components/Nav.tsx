@@ -7,6 +7,7 @@ import gsap from "gsap";
 
 const LINKS = [
   { href: "/", label: "Lookup" },
+  { href: "/spending", label: "Spending" },
   { href: "/compare", label: "Compare" },
 ];
 
@@ -25,11 +26,11 @@ export default function Nav() {
   return (
     <nav
       ref={navRef}
-      className="sticky top-0 z-50 border-b border-border bg-card/80 backdrop-blur-md px-6 py-3 flex items-center justify-between"
-      style={{ opacity: 0 }}
+      className="sticky top-0 z-50 border-b border-border bg-card/90 backdrop-blur-md px-6 py-3 flex items-center justify-between"
+      style={{ opacity: 0, borderTop: "3px solid var(--accent-darkest)" }}
     >
       <Link href="/" className="flex items-center gap-2">
-        <div className="w-7 h-7 bg-accent rounded-lg flex items-center justify-center">
+        <div className="w-7 h-7 bg-accent-darkest rounded-sm flex items-center justify-center">
           <svg
             className="w-4 h-4 text-white"
             fill="none"
@@ -49,12 +50,12 @@ export default function Nav() {
             />
           </svg>
         </div>
-        <span className="text-lg font-bold text-foreground">
+        <span className="text-lg font-bold text-foreground tracking-tight">
           Civic<span className="text-accent">Lens</span>
         </span>
       </Link>
 
-      <div className="flex items-center gap-1 bg-background rounded-lg p-1">
+      <div className="flex items-center border border-border rounded-sm overflow-hidden">
         {LINKS.map((link) => {
           const isActive =
             link.href === "/"
@@ -64,10 +65,10 @@ export default function Nav() {
             <Link
               key={link.href}
               href={link.href}
-              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
+              className={`px-4 py-1.5 text-sm font-semibold transition-colors ${
                 isActive
-                  ? "bg-accent text-white shadow-sm"
-                  : "text-muted hover:text-foreground"
+                  ? "bg-accent-darkest text-white"
+                  : "text-muted hover:text-foreground hover:bg-card-hover"
               }`}
             >
               {link.label}

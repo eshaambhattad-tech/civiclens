@@ -38,6 +38,7 @@ export interface Official {
   phone?: string;
   term_end?: string;
   certainty: string;
+  photo_url?: string | null;
   source_url: string;
   as_of: string;
 }
@@ -111,6 +112,80 @@ export async function compareUnits(unitIds: string[], metric: string, fiscalYear
     metric,
     fiscal_year: fiscalYear ? String(fiscalYear) : "",
   });
+}
+
+export interface SpendingUnit {
+  unit_id: string;
+  name: string;
+  type: string;
+  population?: number;
+  website?: string;
+  total_revenues: number | null;
+  total_expenditures: number | null;
+  fund_balance: number | null;
+  total_debt: number | null;
+  per_capita_expenditures: number | null;
+  per_capita_revenues: number | null;
+  surplus: number | null;
+  expenditures_by_category: Record<string, number>;
+  revenues_by_category: Record<string, number>;
+  expenditures_by_fund: Record<string, number>;
+  filed_on_time?: boolean;
+}
+
+export interface SpendingOverview {
+  fiscal_year: number;
+  available_years: number[];
+  units: SpendingUnit[];
+  totals: {
+    unit_count: number;
+    total_expenditures: number;
+    total_revenues: number;
+    population: number;
+    by_category: Record<string, number>;
+  };
+  caveats: string[];
+  provenance: Provenance;
+}
+
+export async function getSpending(fiscalYear?: number, type?: string) {
+  return fetchAPI<SpendingOverview>("/spending", {
+    fiscal_year: fiscalYear ? String(fiscalYear) : "",
+    type: type || "",
+  });
+}
+
+export interface DirectoryUnit {
+  id: string;
+  name: string;
+  type: string;
+  population: number | null;
+  website: string | null;
+  officials_count: number;
+  photo_count: number;
+  afr_years: number;
+  latest_fy: number | null;
+  spend_lines: number;
+  meetings_count: number;
+  has: { officials: boolean; finances: boolean; meetings: boolean; spending_detail: boolean };
+  tracked_count: number;
+  coverage: string;
+}
+
+export interface Directory {
+  units: DirectoryUnit[];
+  totals: {
+    units: number;
+    by_type: Record<
+      string,
+      { total: number; officials: number; finances: number; meetings: number; spending_detail: number }
+    >;
+  };
+  provenance: Provenance;
+}
+
+export async function getDirectory() {
+  return fetchAPI<Directory>("/units/directory");
 }
 
 export async function getFreshness(unitId?: string) {

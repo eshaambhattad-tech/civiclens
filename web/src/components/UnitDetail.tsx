@@ -5,6 +5,7 @@ import Link from "next/link";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { motion } from "framer-motion";
+import OfficialAvatar from "@/components/OfficialAvatar";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -19,6 +20,7 @@ interface Official {
   email?: string;
   phone?: string;
   term_end?: string;
+  photo_url?: string | null;
 }
 
 interface AFRYear {
@@ -205,8 +207,10 @@ export default function UnitDetail({
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, delay: 0.3 + i * 0.05 }}
-                className="border border-border rounded-xl p-4 bg-card hover:shadow-md hover:border-accent/30 transition-all"
+                className="border border-border rounded-sm p-4 bg-card hover:shadow-md hover:border-accent/30 transition-all flex gap-3.5"
               >
+                <OfficialAvatar name={o.name} photoUrl={o.photo_url} size={52} />
+                <div className="min-w-0">
                 <div className="text-xs text-muted uppercase tracking-wider mb-1.5 font-medium">
                   {o.role}
                 </div>
@@ -214,7 +218,7 @@ export default function UnitDetail({
                 {o.email && (
                   <a
                     href={`mailto:${o.email}`}
-                    className="text-sm text-accent hover:underline mt-1 block"
+                    className="text-sm text-accent hover:underline mt-1 block truncate"
                   >
                     {o.email}
                   </a>
@@ -237,6 +241,7 @@ export default function UnitDetail({
                     Term ends {o.term_end}
                   </div>
                 )}
+                </div>
               </motion.div>
             ))}
           </div>

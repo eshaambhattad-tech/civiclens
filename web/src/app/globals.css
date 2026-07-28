@@ -1,20 +1,38 @@
 @import "tailwindcss";
 
 :root {
-  --background: #fafafa;
-  --foreground: #111827;
-  --accent: #1d4ed8;
-  --accent-light: #dbeafe;
-  --muted: #6b7280;
-  --border: #e5e7eb;
+  /* Institutional palette — steps drawn from the U.S. Web Design System family. */
+  --background: #f4f6f8;
+  --foreground: #1b1b1b;
+  --accent: #005ea2;
+  --accent-dark: #1a4480;
+  --accent-darkest: #162e51;
+  --accent-light: #d9e8f6;
+  --muted: #565c65;
+  --border: #dfe1e2;
   --card: #ffffff;
-  --card-hover: #f9fafb;
+  --card-hover: #eff4f9;
+
+  /* Chart roles. Bar step is validated against the white card surface;
+     navy is chrome-only — it sits below the mark lightness band. */
+  --viz-bar: #005ea2;
+  --viz-bar-soft: #d9e8f6;
+  --viz-surplus: #005ea2;
+  --viz-deficit: #d83933;
+  --viz-grid: #dfe1e2;
+  --viz-axis: #71767a;
+
+  --status-warning: #b45309;
+  --status-warning-bg: #faf3d1;
+  --status-warning-border: #e6c74c;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-accent: var(--accent);
+  --color-accent-dark: var(--accent-dark);
+  --color-accent-darkest: var(--accent-darkest);
   --color-accent-light: var(--accent-light);
   --color-muted: var(--muted);
   --color-border: var(--border);
@@ -25,7 +43,20 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Institutional micro-label: small, uppercase, tracked out. */
+.label-gov {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.rule-accent {
+  border-top: 3px solid var(--accent-dark);
 }
 
 /* Leaflet tooltip overrides */
@@ -45,6 +76,11 @@ body {
 /* Leaflet container reset */
 .leaflet-container {
   font-family: inherit !important;
+}
+
+/* Compare map popup */
+.compare-info-card {
+  z-index: 1000;
 }
 
 /* Smooth scroll */
