@@ -2,6 +2,7 @@ import AddressSearch from "@/components/AddressSearch";
 import AnimatedHero from "@/components/AnimatedHero";
 import ResultsSection from "@/components/ResultsSection";
 import HomeMapSection from "@/components/HomeMapSection";
+import UnitDirectory from "@/components/UnitDirectory";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -30,16 +31,16 @@ export default async function Home({
   return (
     <div>
       {/* Hero */}
-      <section className="relative overflow-hidden bg-gradient-to-b from-blue-50 to-background">
-        <div className="max-w-5xl mx-auto px-6 pt-16 pb-12">
-          <div className="text-center mb-10">
+      <section className="relative overflow-hidden bg-gradient-to-b from-accent-light/50 to-background">
+        <div className="max-w-5xl mx-auto px-6 pt-16 pb-14">
+          <div className="text-center">
             {!address && <AnimatedHero />}
             {address && (
               <>
-                <h1 className="text-4xl font-bold mb-3">
+                <h1 className="text-4xl font-bold mb-3 tracking-tight">
                   Who governs your corner of Cook County?
                 </h1>
-                <p className="text-muted text-lg mb-8">
+                <p className="text-muted text-lg mb-10">
                   Enter any address to see every layer of local government — who
                   represents you, where the money goes, and what&apos;s on the
                   next agenda.
@@ -75,7 +76,12 @@ export default async function Home({
           />
         )}
 
-        {!address && <HomeMapSection />}
+        {!address && (
+          <>
+            <HomeMapSection />
+            <UnitDirectory />
+          </>
+        )}
       </section>
     </div>
   );

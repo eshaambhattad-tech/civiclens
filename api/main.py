@@ -283,6 +283,112 @@ async def units_geojson(request: Request, type: str = None):
     return {"type": "FeatureCollection", "features": features}
 
 
+@app.get("/units/with-officials")
+async def units_with_officials(request: Request, type: str = None):
+    sql = """
+        select u.id, u.name, u.type, u.population, u.website,
+               ST_AsGeoJSON(u.geom)::json as geometry,
+               o.role as official_role, o.name as official_name, o.photo_url as official_photo
+        from units u
+        left join lateral (
+            select role, name, photo_url from officials
+            where unit_id = u.id
+            order by case role when 'supervisor' then 0 when 'clerk' then 1 when 'president' then 2 when 'mayor' then 3 else 4 end
+            limit 1
+        ) o on true
+        where u.geom is not null
+    """
+    params = []
+    if type:
+        sql += " and u.type = %s"
+        params.append(type)
+    sql += " order by u.name"
+    async with pool.connection() as conn:
+        rows = await (await conn.execute(sql, params)).fetchall()
+    units = []
+    features = []
+    for r in rows:
+        units.append({
+            "id": r["id"],
+            "name": r["name"],
+            "type": r["type"],
+            "population": r["population"],
+            "website": r["website"],
+            "official_role": r["official_role"],
+            "official_name": r["official_name"],
+            "official_photo": r["official_photo"],
+        })
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "id": r["id"],
+                "name": r["name"],
+                "unit_type": r["type"],
+                "population": r["population"],
+                "official_role": r["official_role"],
+                "official_name": r["official_name"],
+                "official_photo": r["official_photo"],
+            },
+            "geometry": r["geometry"],
+        })
+    await log_usage(request, "units_with_officials", params={"type": type})
+    return {
+        "units": units,
+        "geojson": {"type": "FeatureCollection", "features": features},
+    }
+
+
+@app.get("/units/directory")
+async def units_directory(request: Request):
+    """Every unit with what CivicLens actually tracks for it."""
+    async with pool.connection() as conn:
+        rows = await (await conn.execute("""
+            select u.id, u.name, u.type, u.population, u.website,
+                   (select count(*) from officials o where o.unit_id = u.id) as officials_count,
+                   (select count(*) from officials o
+                     where o.unit_id = u.id and o.photo_url is not null) as photo_count,
+                   (select count(*) from afr_summaries a where a.unit_id = u.id) as afr_years,
+                   (select max(fiscal_year) from afr_summaries a where a.unit_id = u.id) as latest_fy,
+                   (select count(*) from spend_lines s where s.unit_id = u.id) as spend_lines,
+                   (select count(*) from meetings m where m.unit_id = u.id) as meetings_count
+            from units u
+            order by u.type, u.name
+        """)).fetchall()
+
+    units = []
+    for r in rows:
+        has = {
+            "officials": r["officials_count"] > 0,
+            "finances": r["afr_years"] > 0,
+            "meetings": r["meetings_count"] > 0,
+            "spending_detail": r["spend_lines"] > 0,
+        }
+        tracked = sum(has.values())
+        units.append({
+            **r,
+            "has": has,
+            "tracked_count": tracked,
+            "coverage": coverage_level(r["officials_count"], r["afr_years"],
+                                       r["spend_lines"], r["meetings_count"]),
+        })
+
+    by_type: dict[str, dict] = {}
+    for u in units:
+        t = by_type.setdefault(u["type"], {"total": 0, "officials": 0, "finances": 0,
+                                           "meetings": 0, "spending_detail": 0})
+        t["total"] += 1
+        for k in ("officials", "finances", "meetings", "spending_detail"):
+            if u["has"][k]:
+                t[k] += 1
+
+    await log_usage(request, "units_directory")
+    return {
+        "units": units,
+        "totals": {"units": len(units), "by_type": by_type},
+        "provenance": provenance(COMPTROLLER_URL, note="Coverage reflects what has been ingested, not what exists."),
+    }
+
+
 @app.get("/units/{unit_id}")
 async def get_unit(request: Request, unit_id: str):
     async with pool.connection() as conn:
@@ -320,7 +426,7 @@ async def get_officials(request: Request, unit_id: str):
         if not u:
             err("UNIT_NOT_FOUND", f"No unit '{unit_id}'.", "Use /units to list valid unit ids.")
         rows = await (await conn.execute(
-            """select role, name, email, phone, term_end, certainty, source_url, as_of
+            """select role, name, email, phone, term_end, certainty, photo_url, source_url, as_of
                from officials where unit_id = %s
                order by case role when 'supervisor' then 0 when 'clerk' then 1 else 2 end, role, name""",
             (unit_id,),
@@ -431,6 +537,84 @@ async def compare_units(request: Request, unit_ids: str = Query(..., description
         "caveats": caveats,
         "provenance": provenance(COMPTROLLER_URL, fiscal_year or "latest per unit",
                                  note="AFR data is self-reported; fiscal years may differ across units."),
+    }
+
+
+@app.get("/spending")
+async def spending_overview(request: Request, fiscal_year: int = None, type: str = None):
+    async with pool.connection() as conn:
+        if fiscal_year is None:
+            fy_row = await (await conn.execute("select max(fiscal_year) as fy from afr_summaries")).fetchone()
+            fiscal_year = fy_row["fy"]
+        sql = """
+            select a.unit_id, u.name, u.type, u.population, u.website,
+                   a.total_revenues, a.total_expenditures, a.fund_balance,
+                   a.total_debt, a.fund_detail, a.filed_on_time, a.source_url
+            from afr_summaries a join units u on u.id = a.unit_id
+            where a.fiscal_year = %s
+        """
+        params = [fiscal_year]
+        if type:
+            sql += " and u.type = %s"
+            params.append(type)
+        sql += " order by a.total_expenditures desc nulls last"
+        rows = await (await conn.execute(sql, params)).fetchall()
+        years = [r["fiscal_year"] for r in await (await conn.execute(
+            "select distinct fiscal_year from afr_summaries order by fiscal_year desc")).fetchall()]
+
+    units = []
+    category_totals: dict[str, float] = {}
+    for r in rows:
+        pop, exp, rev = r["population"], r["total_expenditures"], r["total_revenues"]
+        detail = r["fund_detail"] or {}
+        by_cat = detail.get("expenditures_by_category") or {}
+        for cat, amt in by_cat.items():
+            category_totals[cat] = category_totals.get(cat, 0) + float(amt)
+        units.append({
+            "unit_id": r["unit_id"],
+            "name": r["name"],
+            "type": r["type"],
+            "population": pop,
+            "website": r["website"],
+            "total_revenues": float(rev) if rev is not None else None,
+            "total_expenditures": float(exp) if exp is not None else None,
+            "fund_balance": float(r["fund_balance"]) if r["fund_balance"] is not None else None,
+            "total_debt": float(r["total_debt"]) if r["total_debt"] is not None else None,
+            "per_capita_expenditures": round(float(exp) / pop, 2) if pop and exp is not None else None,
+            "per_capita_revenues": round(float(rev) / pop, 2) if pop and rev is not None else None,
+            "surplus": float(rev) - float(exp) if rev is not None and exp is not None else None,
+            "expenditures_by_category": {k: float(v) for k, v in by_cat.items()},
+            "revenues_by_category": {k: float(v) for k, v in (detail.get("revenues_by_category") or {}).items()},
+            "expenditures_by_fund": {k: float(v) for k, v in (detail.get("expenditures_by_fund") or {}).items()},
+            "filed_on_time": r["filed_on_time"],
+        })
+
+    totals = {
+        "unit_count": len(units),
+        "total_expenditures": sum(u["total_expenditures"] or 0 for u in units),
+        "total_revenues": sum(u["total_revenues"] or 0 for u in units),
+        "population": sum(u["population"] or 0 for u in units),
+        "by_category": dict(sorted(category_totals.items(), key=lambda kv: -kv[1])),
+    }
+
+    caveats = ["AFR data is self-reported by each government and may contain filing errors.",
+               "Only units with an Annual Financial Report on file for this year are shown."]
+    no_pop = [u["name"] for u in units if not u["population"]]
+    if no_pop:
+        caveats.append(f"No population on file, so per-capita is unavailable for: {', '.join(no_pop)}.")
+    late = [u["name"] for u in units if u["filed_on_time"] is False]
+    if late:
+        caveats.append(f"Filed late (possible data quality issues): {', '.join(late)}.")
+
+    await log_usage(request, "spending_overview", params={"fiscal_year": fiscal_year, "type": type})
+    return {
+        "fiscal_year": fiscal_year,
+        "available_years": years,
+        "units": units,
+        "totals": totals,
+        "caveats": caveats,
+        "provenance": provenance(COMPTROLLER_URL, f"FY{fiscal_year}",
+                                 note="Self-reported Annual Financial Report data."),
     }
 
 

@@ -60,21 +60,21 @@ export default function HomeMapSection() {
       <div ref={headingRef} style={{ opacity: 0 }}>
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-5">
           <div>
-            <h2 className="text-2xl font-bold">Explore Cook County</h2>
+            <h2 className="text-2xl font-bold tracking-tight">Explore Cook County</h2>
             <p className="text-muted text-sm mt-1">
               Click any boundary to view officials, finances, and meetings.
             </p>
           </div>
 
           {/* Type filter tabs */}
-          <div className="flex gap-1 bg-card border border-border rounded-lg p-1">
+          <div className="flex bg-card border border-border rounded-sm overflow-hidden">
             {TYPES.map((t) => (
               <button
                 key={t.value}
                 onClick={() => setFilterType(t.value)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
                   filterType === t.value
-                    ? "bg-accent text-white shadow-sm"
+                    ? "bg-accent-darkest text-white"
                     : "text-muted hover:text-foreground hover:bg-card-hover"
                 }`}
               >

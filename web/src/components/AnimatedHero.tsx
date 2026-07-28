@@ -66,29 +66,29 @@ export default function AnimatedHero() {
 
       <div
         ref={statsRef}
-        className="grid grid-cols-3 gap-8 max-w-md mx-auto text-center"
+        className="grid grid-cols-3 gap-8 max-w-md mx-auto text-center mb-14"
       >
         <div className="opacity-0">
-          <div className="text-3xl sm:text-4xl font-bold text-foreground mb-1">
+          <div className="text-3xl sm:text-4xl font-bold text-accent-darkest tabular-nums mb-1.5">
             178
           </div>
-          <div className="text-xs sm:text-sm text-muted uppercase tracking-wide">
+          <div className="label-gov">
             Gov Units
           </div>
         </div>
         <div className="opacity-0">
-          <div className="text-3xl sm:text-4xl font-bold text-foreground mb-1">
+          <div className="text-3xl sm:text-4xl font-bold text-accent-darkest tabular-nums mb-1.5">
             225
           </div>
-          <div className="text-xs sm:text-sm text-muted uppercase tracking-wide">
+          <div className="label-gov">
             Officials
           </div>
         </div>
         <div className="opacity-0">
-          <div className="text-3xl sm:text-4xl font-bold text-foreground mb-1">
+          <div className="text-3xl sm:text-4xl font-bold text-accent-darkest tabular-nums mb-1.5">
             342
           </div>
-          <div className="text-xs sm:text-sm text-muted uppercase tracking-wide">
+          <div className="label-gov">
             Meetings
           </div>
         </div>
