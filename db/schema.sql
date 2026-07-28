@@ -12,10 +12,23 @@ create table if not exists units (
   agenda_platform text,
   packet_url      text,
   population      int,
+  general_email   text,
+  general_phone   text,
   as_of           date not null
 );
 create index if not exists units_geom_idx on units using gist (geom);
 create index if not exists units_type_idx on units (type);
+
+create table if not exists unit_demographics (
+  unit_id       text references units primary key,
+  population    int,
+  median_income numeric,
+  poverty_count int,
+  housing_units int,
+  vintage       text not null,
+  source_url    text not null,
+  as_of         date not null
+);
 
 create table if not exists documents (
   id             serial primary key,

@@ -14,7 +14,10 @@ from db import apply_schema, connect
 
 API_URL = "https://datacatalog.cookcountyil.gov/resource/jsup-zs8y.json"
 SOURCE_URL = "https://datacatalog.cookcountyil.gov/d/jsup-zs8y"
-NEXT_CONSOLIDATED_ELECTION = dt.date(2027, 4, 6)
+# The Socrata dataset last updated its rows on 2014-10-27; the newest
+# election_id it carries is 40913 == 2013-04-09. as_of must record that
+# vintage, not the scrape date, and no term_end can be inferred from it.
+DATA_VINTAGE = dt.date(2013, 4, 9)
 
 ROLE_MAP = {
     "supervisor": "supervisor",
@@ -51,7 +54,6 @@ def load(dry_run=False):
     records = fetch_officials()
     print(f"fetched {len(records)} records from Socrata API")
 
-    today = dt.date.today()
     n, skipped = 0, 0
     seen_units = set()
     loaded_by_unit = {}
@@ -98,8 +100,8 @@ def load(dry_run=False):
 
         conn.execute(
             """insert into officials (unit_id, role, name, email, phone, term_end, certainty, source_url, as_of)
-               values (%s,%s,%s,%s,%s,%s,'extracted',%s,%s)""",
-            (uid, role, name, email, phone, NEXT_CONSOLIDATED_ELECTION, SOURCE_URL, today),
+               values (%s,%s,%s,%s,%s,null,'stale_risk',%s,%s)""",
+            (uid, role, name, email, phone, SOURCE_URL, DATA_VINTAGE),
         )
         loaded_by_unit.setdefault(uid, []).append(name)
         n += 1

@@ -18,7 +18,7 @@ load_dotenv()
 log = logging.getLogger("civiclens.api")
 
 GEOCODER = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
-COMPTROLLER_URL = "https://illinoiscomptroller.gov/financial-reports-data/data-sets-portals/local-government-financial-databases"
+COMPTROLLER_URL = "https://illinoiscomptroller.gov/constituent-services/local-government/local-government-warehouse"
 
 VALID_METRICS = {"total_expenditures", "per_capita_expenditures", "fund_balance", "debt", "ga_spend"}
 DB_STATEMENT_TIMEOUT_MS = 10_000
@@ -444,7 +444,9 @@ async def get_officials(request: Request, unit_id: str):
         "officials": rows,
         "provenance": provenance(rows[0]["source_url"], max(r["as_of"] for r in rows),
                                  certainty=rows[0]["certainty"],
-                                 note="State the as_of date when reporting who holds office; the April 2027 consolidated election will change these rows."),
+                                 note="Sourced from the Cook County Clerk directory, whose rows were last "
+                                      "updated in 2014 and whose newest election is April 2013. Always state "
+                                      "the as_of date; treat these as historical, not a current roster."),
     }
 
 
