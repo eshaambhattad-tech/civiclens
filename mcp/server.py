@@ -36,7 +36,7 @@ GEOCODER_TIMEOUT_S = 10
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 GEOCODER = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
-COMPTROLLER_URL = "https://illinoiscomptroller.gov/financial-reports-data/data-sets-portals/local-government-financial-databases"
+COMPTROLLER_URL = "https://illinoiscomptroller.gov/constituent-services/local-government/local-government-warehouse"
 
 mcp = FastMCP(
     "illinois-civic",
@@ -46,7 +46,8 @@ mcp = FastMCP(
         "Always cite the as_of date and source when presenting data to users. "
         "Certainty levels: verified (official filing), extracted (parsed from PDF, may have errors), stale_risk (older than update cycle). "
         "AFR financial data is self-reported by governments and may contain filing errors. "
-        "Officials data will change after the April 2027 consolidated election."
+        "Officials data comes from a Cook County directory last refreshed in 2014 (newest election "
+        "April 2013) and is flagged stale_risk. Never present these names as the current roster."
     ),
 )
 
@@ -370,8 +371,9 @@ def get_officials(unit_id: str) -> dict:
     Returns role, name, contact info, term end date, and data certainty.
 
     IMPORTANT: Always state the as_of date when reporting who holds office.
-    The April 2027 consolidated election will change these rows.
-    Officials are currently loaded for townships only.
+    These rows come from a directory last updated in 2014 whose newest election
+    is April 2013, so they are flagged stale_risk. Present them as a historical
+    record and tell the user to verify against the unit's official site.
     """
     with get_conn() as conn:
         u = conn.execute("select id from units where id=%s", (unit_id,)).fetchone()
@@ -398,7 +400,9 @@ def get_officials(unit_id: str) -> dict:
         "provenance": provenance(
             rows[0]["source_url"], max(r["as_of"] for r in rows),
             certainty=rows[0]["certainty"],
-            note="State the as_of date when reporting who holds office; the April 2027 consolidated election will change these rows."),
+            note="Sourced from the Cook County Clerk directory, whose rows were last updated in 2014 "
+                 "and whose newest election is April 2013. Always state the as_of date; treat these "
+                 "as historical, not a current roster."),
     })
 
 

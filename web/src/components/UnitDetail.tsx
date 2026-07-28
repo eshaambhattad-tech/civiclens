@@ -21,6 +21,7 @@ interface Official {
   phone?: string;
   term_end?: string;
   photo_url?: string | null;
+  certainty?: string;
 }
 
 interface AFRYear {
@@ -193,6 +194,22 @@ export default function UnitDetail({
           <div className="w-1 h-6 bg-accent rounded-full" />
           Elected Officials
         </h2>
+        {officials.some((o) => o.certainty === "stale_risk") && (
+          <div
+            className="mb-4 px-4 py-3 border-l-4 text-sm"
+            style={{
+              background: "var(--status-warning-bg)",
+              borderColor: "var(--status-warning-border)",
+            }}
+          >
+            <strong className="font-semibold" style={{ color: "var(--status-warning)" }}>
+              ⚠ These names may be out of date.
+            </strong>{" "}
+            Cook County last refreshed its elected-officials dataset in 2014, and the newest
+            election it covers is April 2013. Treat this as a historical record, not a current
+            roster — verify against the unit&apos;s official site before relying on it.
+          </div>
+        )}
         {officials.length === 0 ? (
           <div className="bg-card border border-border rounded-xl p-6 text-center">
             <p className="text-muted text-sm">
