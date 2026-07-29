@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import ColdStartNotice from "./ColdStartNotice";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 
@@ -84,6 +85,8 @@ export default function HomeMapSection() {
           </div>
         </div>
       </div>
+
+      <ColdStartNotice />
 
       <CookCountyMap filterType={filterType || undefined} />
 
