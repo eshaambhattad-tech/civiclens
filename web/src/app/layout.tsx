@@ -25,13 +25,17 @@ export default function RootLayout({
               Data from Census TIGER/Line, IL Comptroller AFR, Cook County
               Clerk. Self-reported; may contain errors.
             </span>
-            <a
-              href="https://github.com/eshaambhattad-tech/civiclens"
-              className="underline hover:text-accent"
-              target="_blank"
-            >
-              Source on GitHub
-            </a>
+            <span className="flex items-center gap-3 shrink-0">
+              <a
+                href="https://github.com/eshaambhattad-tech/civiclens"
+                className="underline hover:text-accent"
+                target="_blank"
+              >
+                Source on GitHub
+              </a>
+              <span aria-hidden="true">·</span>
+              <span>Made by Eshaam Bhattad</span>
+            </span>
           </div>
         </footer>
       </body>
