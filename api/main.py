@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import sys
 from contextlib import asynccontextmanager
 
 import httpx
@@ -12,6 +13,9 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from psycopg_pool import AsyncConnectionPool
 from psycopg.rows import dict_row
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from financial_grade import build_township_grades, grade_for_unit
 
 load_dotenv()
 
@@ -338,6 +342,65 @@ async def units_with_officials(request: Request, type: str = None):
     }
 
 
+@app.get("/grades/townships")
+async def township_grades(request: Request):
+    """Peer-relative financial management grades for Cook County townships."""
+    async with pool.connection() as conn:
+        rows = await _load_township_grade_rows(conn)
+    bundle = build_township_grades(rows)
+    await log_usage(request, "township_grades", params={"fiscal_year": bundle.get("fiscal_year")})
+    return {
+        **bundle,
+        "provenance": provenance(
+            COMPTROLLER_URL, f"FY{bundle['fiscal_year']}" if bundle.get("fiscal_year") else None,
+            certainty="extracted",
+            note="Peer-relative grade from self-reported AFR filings — not an audit opinion.",
+        ),
+    }
+
+
+@app.get("/units/{unit_id}/grade")
+async def unit_grade(request: Request, unit_id: str):
+    """Financial management grade for one unit (townships only today)."""
+    async with pool.connection() as conn:
+        u = await (await conn.execute(
+            "select id, name, type from units where id=%s", (unit_id,)
+        )).fetchone()
+        if not u:
+            err("UNIT_NOT_FOUND", f"No unit '{unit_id}'.", "Use /units to list valid unit ids.")
+        if u["type"] != "township":
+            await log_usage(request, "unit_grade", unit_id=unit_id)
+            return {
+                "unit_id": unit_id,
+                "name": u["name"],
+                "type": u["type"],
+                "letter": None,
+                "score": None,
+                "ungraded_reason": "Financial grades are currently computed for townships only.",
+                "provenance": provenance(COMPTROLLER_URL, certainty="extracted"),
+            }
+        rows = await _load_township_grade_rows(conn)
+    bundle = build_township_grades(rows)
+    g = grade_for_unit(bundle, unit_id)
+    if not g:
+        g = {
+            "unit_id": unit_id,
+            "name": u["name"],
+            "letter": None,
+            "score": None,
+            "ungraded_reason": "No grade available.",
+        }
+    await log_usage(request, "unit_grade", unit_id=unit_id)
+    return {
+        **g,
+        "provenance": provenance(
+            COMPTROLLER_URL, f"FY{bundle['fiscal_year']}" if bundle.get("fiscal_year") else None,
+            certainty="extracted",
+            note="Peer-relative grade from self-reported AFR filings — not an audit opinion.",
+        ),
+    }
+
+
 @app.get("/units/directory")
 async def units_directory(request: Request):
     """Every unit with what CivicLens actually tracks for it."""
@@ -354,6 +417,11 @@ async def units_directory(request: Request):
             from units u
             order by u.type, u.name
         """)).fetchall()
+        grade_rows = await _load_township_grade_rows(conn)
+
+    grade_bundle = build_township_grades(grade_rows)
+    grade_by_id = {g["unit_id"]: g for g in grade_bundle["grades"]}
+    ungraded_by_id = {u["unit_id"]: u for u in grade_bundle.get("ungraded") or []}
 
     units = []
     for r in rows:
@@ -364,12 +432,18 @@ async def units_directory(request: Request):
             "spending_detail": r["spend_lines"] > 0,
         }
         tracked = sum(has.values())
+        g = grade_by_id.get(r["id"])
+        ug = ungraded_by_id.get(r["id"])
         units.append({
             **r,
             "has": has,
             "tracked_count": tracked,
             "coverage": coverage_level(r["officials_count"], r["afr_years"],
                                        r["spend_lines"], r["meetings_count"]),
+            "grade_letter": g["letter"] if g else None,
+            "grade_score": g["score"] if g else None,
+            "grade_rank": g["rank"] if g else None,
+            "grade_fiscal_year": grade_bundle.get("fiscal_year") if (g or ug) else None,
         })
 
     by_type: dict[str, dict] = {}
@@ -385,6 +459,7 @@ async def units_directory(request: Request):
     return {
         "units": units,
         "totals": {"units": len(units), "by_type": by_type},
+        "grade_fiscal_year": grade_bundle.get("fiscal_year"),
         "provenance": provenance(COMPTROLLER_URL, note="Coverage reflects what has been ingested, not what exists."),
     }
 
@@ -542,11 +617,90 @@ async def compare_units(request: Request, unit_ids: str = Query(..., description
     }
 
 
+async def _load_township_grade_rows(conn) -> list[dict]:
+    """AFR rows + filing continuity for every Cook County township."""
+    rows = await (await conn.execute("""
+        select u.id as unit_id, u.name, u.population,
+               a.fiscal_year, a.total_expenditures, a.total_revenues,
+               a.fund_balance, a.filed_on_time, a.fund_detail,
+               (select count(*) from afr_summaries x where x.unit_id = u.id) as afr_year_count,
+               (select count(*) from afr_summaries x
+                 where x.unit_id = u.id and x.filed_on_time is true) as on_time_count
+        from units u
+        left join afr_summaries a on a.unit_id = u.id
+        where u.type = 'township'
+        order by u.name, a.fiscal_year
+    """)).fetchall()
+    out = []
+    for r in rows:
+        if r["fiscal_year"] is None:
+            out.append({
+                "unit_id": r["unit_id"], "name": r["name"], "population": r["population"],
+                "fiscal_year": 0, "total_expenditures": None, "total_revenues": None,
+                "fund_balance": None, "filed_on_time": None,
+                "expenditures_by_category": {},
+                "afr_year_count": 0, "on_time_count": 0,
+            })
+            continue
+        detail = r["fund_detail"] or {}
+        if isinstance(detail, str):
+            detail = json.loads(detail)
+        out.append({
+            "unit_id": r["unit_id"],
+            "name": r["name"],
+            "population": r["population"],
+            "fiscal_year": r["fiscal_year"],
+            "total_expenditures": r["total_expenditures"],
+            "total_revenues": r["total_revenues"],
+            "fund_balance": r["fund_balance"],
+            "filed_on_time": r["filed_on_time"],
+            "expenditures_by_category": detail.get("expenditures_by_category") or {},
+            "afr_year_count": r["afr_year_count"],
+            "on_time_count": r["on_time_count"],
+        })
+    return out
+
+
+def _covered_population(units: list[dict]) -> tuple[int, str | None]:
+    """Population covered by reporting units, without double-counting layers.
+
+    Townships, municipalities, and the county overlap geographically. Summing
+    their populations (~12M) overstates residents. Prefer the county figure
+    when present; otherwise sum within a single unit type.
+    """
+    types = {u["type"] for u in units}
+    if "county" in types:
+        county_pop = next((u["population"] for u in units if u["type"] == "county" and u["population"]), None)
+        if county_pop:
+            note = None
+            if len(types) > 1:
+                note = ("Residents covered uses the county population — township and "
+                        "municipal populations overlap the same geography and are not summed.")
+            return int(county_pop), note
+    return sum(u["population"] or 0 for u in units), None
+
+
 @app.get("/spending")
 async def spending_overview(request: Request, fiscal_year: int = None, type: str = None):
     async with pool.connection() as conn:
         if fiscal_year is None:
-            fy_row = await (await conn.execute("select max(fiscal_year) as fy from afr_summaries")).fetchone()
+            # Prefer the latest substantially complete filing year over a sparse
+            # newest year (e.g. FY2025 with ~half the filings of FY2024).
+            fy_row = await (await conn.execute("""
+                with counts as (
+                    select fiscal_year, count(*)::float as n
+                    from afr_summaries group by fiscal_year
+                ),
+                mx as (select max(n) as m from counts)
+                select c.fiscal_year as fy
+                from counts c, mx
+                where c.n >= 0.8 * mx.m
+                order by c.fiscal_year desc
+                limit 1
+            """)).fetchone()
+            if not fy_row:
+                fy_row = await (await conn.execute(
+                    "select max(fiscal_year) as fy from afr_summaries")).fetchone()
             fiscal_year = fy_row["fy"]
         sql = """
             select a.unit_id, u.name, u.type, u.population, u.website,
@@ -591,16 +745,19 @@ async def spending_overview(request: Request, fiscal_year: int = None, type: str
             "filed_on_time": r["filed_on_time"],
         })
 
+    covered_pop, pop_note = _covered_population(units)
     totals = {
         "unit_count": len(units),
         "total_expenditures": sum(u["total_expenditures"] or 0 for u in units),
         "total_revenues": sum(u["total_revenues"] or 0 for u in units),
-        "population": sum(u["population"] or 0 for u in units),
+        "population": covered_pop,
         "by_category": dict(sorted(category_totals.items(), key=lambda kv: -kv[1])),
     }
 
     caveats = ["AFR data is self-reported by each government and may contain filing errors.",
                "Only units with an Annual Financial Report on file for this year are shown."]
+    if pop_note:
+        caveats.append(pop_note)
     no_pop = [u["name"] for u in units if not u["population"]]
     if no_pop:
         caveats.append(f"No population on file, so per-capita is unavailable for: {', '.join(no_pop)}.")

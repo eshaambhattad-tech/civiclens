@@ -81,6 +81,7 @@ EXPENDITURE_LABELS = {
     "252b": "Public Safety - Fire",
     "252c": "Public Safety - Building Inspection",
     "252d": "Public Safety - Other",
+    "253": "Corrections",
     "254": "Judiciary & Legal",
     "255": "Transportation",
     "255a": "Transportation - Highways/Streets",

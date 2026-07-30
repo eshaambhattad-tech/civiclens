@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { getDirectory, type Directory, type DirectoryUnit } from "@/lib/api";
+import { GradeBadge } from "@/components/GradeBadge";
 
 const TYPES = [
   { value: "all", label: "All" },
@@ -19,7 +20,7 @@ const TRACKED: { key: keyof DirectoryUnit["has"]; label: string; short: string }
   { key: "spending_detail", label: "Line-item spending", short: "Spd" },
 ];
 
-type SortKey = "name" | "type" | "population" | "tracked_count";
+type SortKey = "name" | "type" | "population" | "tracked_count" | "grade_score";
 type Dir = "asc" | "desc";
 
 function Check({ on }: { on: boolean }) {
@@ -70,6 +71,11 @@ export default function UnitDirectory() {
     return [...out].sort((a, b) => {
       if (sort === "population") return ((a.population ?? -1) - (b.population ?? -1)) * mult;
       if (sort === "tracked_count") return (a.tracked_count - b.tracked_count) * mult;
+      if (sort === "grade_score") {
+        const av = a.grade_score ?? -1;
+        const bv = b.grade_score ?? -1;
+        return (av - bv) * mult || a.name.localeCompare(b.name);
+      }
       if (sort === "type") return a.type.localeCompare(b.type) * mult || a.name.localeCompare(b.name);
       return a.name.localeCompare(b.name) * mult;
     });
@@ -100,7 +106,9 @@ export default function UnitDirectory() {
         <h2 className="text-xl font-bold tracking-tight">Every government we track</h2>
         <p className="text-sm text-muted mt-1">
           All {data.totals.units} units in Cook County, and exactly what CivicLens holds on each.
-          A dash means we have not ingested it yet — not that the record does not exist.
+          Township money-management grades
+          {data.grade_fiscal_year ? ` (FY${data.grade_fiscal_year})` : ""} are peer-relative
+          from AFR filings — not an audit. A dash means ungraded or not yet ingested.
         </p>
       </div>
 
@@ -172,6 +180,15 @@ export default function UnitDirectory() {
                   Population{arrow("population")}
                 </button>
               </th>
+              <th className="text-center px-3 py-2.5">
+                <button
+                  onClick={() => toggleSort("grade_score")}
+                  className="label-gov hover:text-foreground"
+                  title="Township money-management grade"
+                >
+                  Grade{arrow("grade_score")}
+                </button>
+              </th>
               {TRACKED.map((t) => (
                 <th key={t.key} className="px-3 py-2.5 text-center">
                   <span className="label-gov" title={t.label}>
@@ -203,6 +220,24 @@ export default function UnitDirectory() {
                 <td className="px-3 py-2.5 text-right tabular-nums text-muted">
                   {u.population ? u.population.toLocaleString() : "—"}
                 </td>
+                <td className="px-3 py-2.5 text-center">
+                  <div className="inline-flex flex-col items-center gap-0.5">
+                    <GradeBadge
+                      letter={u.grade_letter}
+                      size="sm"
+                      title={
+                        u.grade_letter
+                          ? `Grade ${u.grade_letter} (${u.grade_score}) · rank ${u.grade_rank}`
+                          : u.type === "township"
+                            ? "Ungraded — no peer-year AFR"
+                            : "Grades are for townships only"
+                      }
+                    />
+                    {u.grade_score != null && (
+                      <span className="text-[10px] tabular-nums text-muted">{u.grade_score}</span>
+                    )}
+                  </div>
+                </td>
                 {TRACKED.map((t) => (
                   <td key={t.key} className="px-3 py-2.5 text-center">
                     <Check on={u.has[t.key]} />
@@ -216,7 +251,7 @@ export default function UnitDirectory() {
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-muted">
+                <td colSpan={9} className="px-4 py-10 text-center text-muted">
                   No governments match that filter.
                 </td>
               </tr>

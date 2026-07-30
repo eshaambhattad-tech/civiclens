@@ -170,6 +170,10 @@ export interface DirectoryUnit {
   has: { officials: boolean; finances: boolean; meetings: boolean; spending_detail: boolean };
   tracked_count: number;
   coverage: string;
+  grade_letter?: string | null;
+  grade_score?: number | null;
+  grade_rank?: number | null;
+  grade_fiscal_year?: number | null;
 }
 
 export interface Directory {
@@ -181,11 +185,52 @@ export interface Directory {
       { total: number; officials: number; finances: number; meetings: number; spending_detail: number }
     >;
   };
+  grade_fiscal_year?: number | null;
   provenance: Provenance;
+}
+
+export interface FinancialGrade {
+  unit_id: string;
+  name: string;
+  letter: string | null;
+  score: number | null;
+  rank?: number;
+  peer_count?: number;
+  fiscal_year?: number;
+  dimensions?: Record<string, number>;
+  flags?: string[];
+  signals?: Record<string, number | boolean | null>;
+  ungraded_reason?: string;
+  methodology?: {
+    summary?: string;
+    limitations?: string[];
+    weights?: Record<string, number>;
+  };
+  peer_median?: {
+    score?: number | null;
+    per_capita_expenditures?: number | null;
+    reserve_months?: number | null;
+  };
+  provenance?: Provenance;
 }
 
 export async function getDirectory() {
   return fetchAPI<Directory>("/units/directory");
+}
+
+export async function getUnitGrade(unitId: string) {
+  return fetchAPI<FinancialGrade>(`/units/${unitId}/grade`);
+}
+
+export async function getTownshipGrades() {
+  return fetchAPI<{
+    fiscal_year: number;
+    grades: FinancialGrade[];
+    ungraded: { unit_id: string; name: string; reason: string }[];
+    methodology: FinancialGrade["methodology"];
+    peer_median: FinancialGrade["peer_median"];
+    provenance: Provenance;
+  }>("/grades/townships");
 }
 
 export async function getFreshness(unitId?: string) {

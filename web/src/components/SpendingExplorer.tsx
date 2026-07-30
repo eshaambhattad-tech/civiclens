@@ -16,8 +16,11 @@ function dollars(n: number | null | undefined) {
 function compact(n: number | null | undefined) {
   if (n === null || n === undefined) return "—";
   const abs = Math.abs(n);
-  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
+  const sign = n < 0 ? "−" : "";
+  const v = abs;
+  if (v >= 1_000_000_000) return `${sign}$${(v / 1_000_000_000).toFixed(1)}B`;
+  if (v >= 1_000_000) return `${sign}$${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `${sign}$${(v / 1_000).toFixed(0)}K`;
   return dollars(n);
 }
 
@@ -27,12 +30,22 @@ function pct(part: number, whole: number) {
 }
 
 type Metric = "total" | "per_capita";
+type UnitTypeFilter = "township" | "municipality" | "county" | "";
+
+const LAYER_OPTIONS: { value: UnitTypeFilter; label: string }[] = [
+  { value: "township", label: "Townships" },
+  { value: "municipality", label: "Municipalities" },
+  { value: "county", label: "County" },
+  { value: "", label: "All layers" },
+];
 
 export default function SpendingExplorer() {
   const [data, setData] = useState<SpendingOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [year, setYear] = useState<number | undefined>(undefined);
+  // Default to townships — summing county + city + townships double-counts the same geography.
+  const [unitType, setUnitType] = useState<UnitTypeFilter>("township");
   const [metric, setMetric] = useState<Metric>("total");
   const [category, setCategory] = useState<string>(ALL);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -52,7 +65,9 @@ export default function SpendingExplorer() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    getSpending(year)
+    setCategory(ALL);
+    setExpanded(null);
+    getSpending(year, unitType || undefined)
       .then((d) => {
         if (cancelled) return;
         setData(d);
@@ -66,7 +81,9 @@ export default function SpendingExplorer() {
     return () => {
       cancelled = true;
     };
-  }, [year]);
+  }, [year, unitType]);
+
+  const mixedLayers = unitType === "";
 
   const categories = useMemo(() => Object.keys(data?.totals.by_category ?? {}), [data]);
 
@@ -91,6 +108,7 @@ export default function SpendingExplorer() {
 
   const medianPerCapita = useMemo(() => {
     if (!data) return null;
+    // Median across reporting units with population — not a single-type slice.
     const vals = data.units
       .map((u) => u.per_capita_expenditures)
       .filter((v): v is number => v !== null)
@@ -98,6 +116,14 @@ export default function SpendingExplorer() {
     if (!vals.length) return null;
     const mid = Math.floor(vals.length / 2);
     return vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+  }, [data]);
+
+  const medianSub = useMemo(() => {
+    if (!data?.units.length) return "per resident";
+    const types = new Set(data.units.map((u) => u.type));
+    if (types.size === 1 && types.has("township")) return "township spending";
+    if (types.size === 1 && types.has("municipality")) return "municipal spending";
+    return "among reporting units";
   }, [data]);
 
   const catMax = data ? Math.max(...Object.values(data.totals.by_category), 0) : 0;
@@ -183,57 +209,100 @@ export default function SpendingExplorer() {
                 Where the money goes
               </h1>
               <p className="text-sm mt-2 max-w-xl" style={{ color: "rgba(255,255,255,0.78)" }}>
-                Every township and the county itself, ranked by what they actually spent, as
-                reported in Annual Financial Reports filed with the Illinois Comptroller.
+                One layer of government at a time — townships, municipalities, or the county —
+                ranked by Annual Financial Reports filed with the Illinois Comptroller.
               </p>
             </div>
-            <div className="flex items-center gap-0 border border-white/25 rounded-sm overflow-hidden">
-              {data.available_years.map((y) => (
-                <button
-                  key={y}
-                  onClick={() => setYear(y)}
-                  className="seg-btn px-4 py-2 text-sm font-semibold tabular-nums"
-                  style={
-                    y === data.fiscal_year
-                      ? { background: "#ffffff", color: "var(--accent-darkest)" }
-                      : { color: "rgba(255,255,255,0.85)" }
-                  }
-                >
-                  FY{y}
-                </button>
-              ))}
+            <div className="flex flex-col items-stretch sm:items-end gap-2">
+              <div className="flex items-center gap-0 border border-white/25 rounded-sm overflow-hidden">
+                {LAYER_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value || "all"}
+                    onClick={() => setUnitType(opt.value)}
+                    className="seg-btn px-3 py-2 text-xs font-semibold"
+                    style={
+                      unitType === opt.value
+                        ? { background: "#ffffff", color: "var(--accent-darkest)" }
+                        : { color: "rgba(255,255,255,0.85)" }
+                    }
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-0 border border-white/25 rounded-sm overflow-hidden self-end">
+                {data.available_years.map((y) => (
+                  <button
+                    key={y}
+                    onClick={() => setYear(y)}
+                    className="seg-btn px-4 py-2 text-sm font-semibold tabular-nums"
+                    style={
+                      y === data.fiscal_year
+                        ? { background: "#ffffff", color: "var(--accent-darkest)" }
+                        : { color: "rgba(255,255,255,0.85)" }
+                    }
+                  >
+                    FY{y}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
       </header>
 
       <div className="max-w-5xl mx-auto px-6 py-10">
+        {mixedLayers && (
+          <div
+            className="mb-8 px-4 py-3 border-l-4 text-sm"
+            style={{
+              borderColor: "var(--status-warning)",
+              background: "var(--status-warning-bg)",
+              color: "var(--foreground)",
+            }}
+          >
+            <strong className="font-semibold">These filings are not one budget.</strong>{" "}
+            County, city, and township AFRs cover overlapping geography. Adding them
+            (e.g. Cook County ~$28B + Chicago ~$19B) produces a ~$50B figure that
+            double-counts the same residents. Prefer a single layer above.
+          </div>
+        )}
+
         {/* Key figures */}
         <section ref={statsRef} className="grid grid-cols-2 md:grid-cols-4 gap-px bg-border border border-border mb-14">
           {[
             {
-              label: "Total spending",
+              label: mixedLayers ? "Sum of filings" : "Total spending",
               raw: totals.total_expenditures,
               format: "compact",
-              sub: `FY${data.fiscal_year}`,
+              sub: mixedLayers
+                ? `FY${data.fiscal_year} · not additive`
+                : `FY${data.fiscal_year}`,
             },
             {
               label: "Governments reporting",
               raw: totals.unit_count,
               format: "int",
-              sub: "with an AFR on file",
+              sub:
+                unitType === "township"
+                  ? "townships with an AFR"
+                  : unitType === "municipality"
+                    ? "municipalities with an AFR"
+                    : unitType === "county"
+                      ? "county AFR"
+                      : "with an AFR on file",
             },
             {
               label: "Residents covered",
               raw: totals.population,
               format: "int",
-              sub: "in reporting units",
+              sub: mixedLayers ? "county population (no double-count)" : "in reporting units",
             },
             {
               label: "Median per resident",
               raw: medianPerCapita ?? 0,
               format: "dollars",
-              sub: "township spending",
+              sub: medianSub,
             },
           ].map((t) => (
             <div key={t.label} className="stat-tile bg-card px-4 py-5" style={{ opacity: 0 }}>
