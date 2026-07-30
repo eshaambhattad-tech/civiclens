@@ -1,19 +1,24 @@
-"""Scrape meeting agendas & minutes from Cook County township websites.
+"""Scrape meeting agendas & minutes from unit websites.
 
-Supports three site patterns:
-  - CivicPlus AgendaCenter (Niles, Bloom, Leyden)
-  - WordPress PDF pages (Schaumburg, Palatine, Thornton)
-  - Custom PHP + PDF links (Maine)
+Sources come from units.agenda_platform + units.packet_url (populated by
+platform_detector.py). One adapter per platform:
+
+  - civicplus   CivicPlus AgendaCenter
+  - wordpress   WordPress pages that list agenda PDFs
+  - custom_php  Custom PHP pages with PDF links (Maine-style)
+  - pdf_list    Generic pages that list dated PDF agendas/minutes
 
 Usage:
-    python meeting_scraper.py                   # scrape all configured townships
-    python meeting_scraper.py --unit cook-niles-township  # scrape one
-    python meeting_scraper.py --dry-run         # preview without DB writes
+    python meeting_scraper.py                      # all supported units
+    python meeting_scraper.py --type township
+    python meeting_scraper.py --platform civicplus
+    python meeting_scraper.py --unit cook-niles-township
+    python meeting_scraper.py --dry-run
 """
 import argparse
 import datetime as dt
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from db import apply_schema, connect
@@ -21,60 +26,25 @@ from db import apply_schema, connect
 HEADERS = {"User-Agent": "CivicLens/1.0 (civic transparency research)"}
 TIMEOUT = 20
 
-TOWNSHIP_SOURCES = [
-    # CivicPlus AgendaCenter sites
-    {
-        "unit_id": "cook-niles-township",
+SUPPORTED_PLATFORMS = ("civicplus", "wordpress", "custom_php", "pdf_list")
+
+# Known oddballs where detector/path heuristics still get the scrape type wrong.
+OVERRIDES = {
+    "cook-maine-township": {
+        "type": "custom_php",
+        "url": "https://mainetown.com/government/agendas_minutes.php",
+    },
+    "cook-niles-township": {
         "type": "civicplus",
         "base_url": "https://nilestownshipgov.com",
         "agenda_path": "/AgendaCenter/Township-Board-2",
     },
-    {
-        "unit_id": "cook-bloom-township",
-        "type": "civicplus",
-        "base_url": "https://bloomtownship.org",
-        "agenda_path": "/AgendaCenter",
-    },
-    {
-        "unit_id": "cook-leyden-township",
-        "type": "civicplus",
-        "base_url": "https://leydentownship.com",
-        "agenda_path": "/AgendaCenter",
-    },
-    {
-        "unit_id": "cook-palos-township",
-        "type": "civicplus",
-        "base_url": "https://palostownship.org",
-        "agenda_path": "/AgendaCenter",
-    },
-    # WordPress PDF sites
-    {
-        "unit_id": "cook-schaumburg-township",
-        "type": "wordpress",
-        "url": "https://schaumburgtownship.org/transparency/agenda-minutes/",
-    },
-    {
-        "unit_id": "cook-palatine-township",
+    # Detector lands on /meetings-events/ (calendar); PDFs live under /documents/.
+    "cook-palatine-township": {
         "type": "wordpress",
         "url": "https://palatinetownship-il.gov/documents/",
     },
-    {
-        "unit_id": "cook-thornton-township",
-        "type": "wordpress",
-        "url": "https://thorntontownship.com/agendas-notices-minutes/",
-    },
-    {
-        "unit_id": "cook-worth-township",
-        "type": "wordpress",
-        "url": "https://worthtownship.com/meeting-agendas-minutes/",
-    },
-    # Custom PHP
-    {
-        "unit_id": "cook-maine-township",
-        "type": "custom_php",
-        "url": "https://mainetown.com/government/agendas_minutes.php",
-    },
-]
+}
 
 
 def fetch(url):
@@ -117,6 +87,16 @@ def parse_date_from_text(text):
         s = m.group(1)
         try:
             return dt.date(int(s[4:8]), int(s[0:2]), int(s[2:4]))
+        except ValueError:
+            pass
+    # compact YYYYMMDD or MM-DD-YYYY in filenames like Agenda+071526.pdf
+    m = re.search(r'(?:agenda|minutes?)[+_\-]?(\d{2})(\d{2})(\d{2,4})', text, re.I)
+    if m:
+        y = int(m.group(3))
+        if y < 100:
+            y += 2000
+        try:
+            return dt.date(y, int(m.group(1)), int(m.group(2)))
         except ValueError:
             pass
     return None
@@ -172,8 +152,8 @@ def scrape_civicplus(source):
     return meetings
 
 
-def scrape_wordpress(source):
-    """Scrape WordPress sites that list agenda PDFs via wp-content/uploads."""
+def _scrape_pdf_page(source, source_label):
+    """Shared PDF-list scraper used by wordpress, custom_php, and pdf_list."""
     html = fetch(source["url"])
     meetings = []
     pdf_links = re.findall(r'href="([^"]*\.pdf[^"]*)"', html, re.I)
@@ -181,21 +161,27 @@ def scrape_wordpress(source):
 
     for link in pdf_links:
         full_url = urljoin(source["url"], link)
-        date = parse_date_from_text(link)
-        if not date:
+        filename = link.rsplit("/", 1)[-1]
+        date = None
+        if source_label == "custom_php":
+            date = _parse_maine_date(filename)
+        date = date or parse_date_from_text(filename) or parse_date_from_text(link)
+        if not date or date.year < 2020 or date.year > 2030:
             continue
         if date not in seen_dates:
             seen_dates[date] = {"date": date, "agenda_url": None, "minutes_url": None}
-        link_lower = link.lower()
-        if "minute" in link_lower:
+        # filename only — path segments like "Agenda & Minutes/" false-positive
+        name_lower = filename.lower()
+        if "minute" in name_lower:
             seen_dates[date]["minutes_url"] = full_url
-        elif "agenda" in link_lower or "packet" in link_lower:
-            seen_dates[date]["agenda_url"] = full_url
+        elif "agenda" in name_lower or "packet" in name_lower or source_label == "pdf_list":
+            # pdf_list: undated keyword-less PDFs with a parseable date still count as agendas
+            if "agenda" in name_lower or "packet" in name_lower or "minute" not in name_lower:
+                if not seen_dates[date]["agenda_url"] or "agenda" in name_lower:
+                    seen_dates[date]["agenda_url"] = full_url
 
     for d, info in sorted(seen_dates.items()):
         if not info["agenda_url"] and not info["minutes_url"]:
-            continue
-        if d.year < 2020 or d.year > 2030:
             continue
         meetings.append({
             "unit_id": source["unit_id"],
@@ -204,9 +190,14 @@ def scrape_wordpress(source):
             "status": "minutes_available" if info["minutes_url"] else "scheduled",
             "agenda_url": info["agenda_url"],
             "minutes_url": info["minutes_url"],
-            "source": "wordpress",
+            "source": source_label,
         })
     return meetings
+
+
+def scrape_wordpress(source):
+    """Scrape WordPress sites that list agenda PDFs via wp-content/uploads."""
+    return _scrape_pdf_page(source, "wordpress")
 
 
 def _parse_maine_date(filename):
@@ -223,45 +214,82 @@ def _parse_maine_date(filename):
 
 def scrape_custom_php(source):
     """Scrape Maine Township style PHP pages with PDF links."""
-    html = fetch(source["url"])
-    meetings = []
-    pdf_links = re.findall(r'href="([^"]*\.pdf[^"]*)"', html, re.I)
-    seen_dates = {}
+    return _scrape_pdf_page(source, "custom_php")
 
-    for link in pdf_links:
-        full_url = urljoin(source["url"], link)
-        date = _parse_maine_date(link) or parse_date_from_text(link)
-        if not date or date.year < 2020 or date.year > 2030:
-            continue
-        if date not in seen_dates:
-            seen_dates[date] = {"date": date, "agenda_url": None, "minutes_url": None}
-        # use filename only to avoid false matches from path like "Agenda & Minutes/"
-        filename = link.rsplit("/", 1)[-1].lower()
-        if "minute" in filename:
-            seen_dates[date]["minutes_url"] = full_url
-        elif "agenda" in filename or "packet" in filename:
-            seen_dates[date]["agenda_url"] = full_url
 
-    for d, info in sorted(seen_dates.items()):
-        if not info["agenda_url"] and not info["minutes_url"]:
-            continue
-        meetings.append({
-            "unit_id": source["unit_id"],
-            "body": "Board of Trustees",
-            "meeting_ts": dt.datetime.combine(d, dt.time(19, 0)),
-            "status": "minutes_available" if info["minutes_url"] else "scheduled",
-            "agenda_url": info["agenda_url"],
-            "minutes_url": info["minutes_url"],
-            "source": "custom_php",
-        })
-    return meetings
+def scrape_pdf_list(source):
+    """Scrape generic pages that list dated PDF agendas/minutes."""
+    return _scrape_pdf_page(source, "pdf_list")
 
 
 SCRAPERS = {
     "civicplus": scrape_civicplus,
     "wordpress": scrape_wordpress,
     "custom_php": scrape_custom_php,
+    "pdf_list": scrape_pdf_list,
 }
+
+
+def _source_from_row(row):
+    """Build a scraper source dict from a units row (+ overrides)."""
+    unit_id = row["id"]
+    if unit_id in OVERRIDES:
+        src = {"unit_id": unit_id, **OVERRIDES[unit_id]}
+        return src
+
+    platform = row["agenda_platform"]
+    packet = row["packet_url"]
+    if not platform or not packet or platform not in SCRAPERS:
+        return None
+
+    if platform == "civicplus":
+        parsed = urlparse(packet)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        path = parsed.path or "/AgendaCenter"
+        return {
+            "unit_id": unit_id,
+            "type": "civicplus",
+            "base_url": base,
+            "agenda_path": path,
+        }
+
+    return {"unit_id": unit_id, "type": platform, "url": packet}
+
+
+def load_sources(conn, unit_id=None, unit_type=None, platform=None):
+    """Load scrape targets from units.agenda_platform / packet_url."""
+    platforms = [platform] if platform else list(SUPPORTED_PLATFORMS)
+    sql = """
+        select id, name, type, agenda_platform, packet_url, website
+        from units
+        where (
+            (agenda_platform = any(%s) and packet_url is not null)
+            or id = any(%s)
+        )
+    """
+    params = [platforms, list(OVERRIDES.keys())]
+    if unit_id:
+        sql += " and id = %s"
+        params.append(unit_id)
+    if unit_type:
+        sql += " and type = %s"
+        params.append(unit_type)
+    if platform:
+        sql += " and (agenda_platform = %s or id = any(%s))"
+        params.extend([platform, [
+            uid for uid, ov in OVERRIDES.items() if ov["type"] == platform
+        ]])
+    sql += " order by type, name"
+    rows = conn.execute(sql, params).fetchall()
+
+    sources = []
+    for row in rows:
+        src = _source_from_row(row)
+        if src and src["type"] in SCRAPERS:
+            if platform and src["type"] != platform:
+                continue
+            sources.append(src)
+    return sources
 
 
 def save_meetings(meetings, dry_run=False):
@@ -318,15 +346,21 @@ def save_meetings(meetings, dry_run=False):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--unit", help="scrape only this unit_id")
+    ap.add_argument("--type", help="limit to unit type (township, municipality, …)")
+    ap.add_argument("--platform", help="limit to one agenda platform", choices=SUPPORTED_PLATFORMS)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    sources = TOWNSHIP_SOURCES
-    if args.unit:
-        sources = [s for s in sources if s["unit_id"] == args.unit]
-        if not sources:
-            print(f"no config for {args.unit}")
-            return
+    conn = connect()
+    apply_schema(conn)
+    sources = load_sources(conn, unit_id=args.unit, unit_type=args.type, platform=args.platform)
+    if args.unit and not sources:
+        print(f"no scrapable source for {args.unit} "
+              f"(need agenda_platform in {SUPPORTED_PLATFORMS} + packet_url)")
+        return
+    if not sources:
+        print("no units with supported agenda_platform + packet_url")
+        return
 
     all_meetings = []
     for src in sources:
@@ -339,7 +373,7 @@ def main():
         except Exception as e:
             print(f"  ERROR: {e}")
 
-    print(f"\ntotal: {len(all_meetings)} meetings across {len(sources)} townships")
+    print(f"\ntotal: {len(all_meetings)} meetings across {len(sources)} units")
     save_meetings(all_meetings, dry_run=args.dry_run)
 
 

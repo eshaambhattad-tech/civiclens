@@ -19,10 +19,11 @@ export default async function UnitPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [unit, officialsData, financesData] = await Promise.all([
+  const [unit, officialsData, financesData, grade] = await Promise.all([
     fetchJSON(`/units/${id}`),
     fetchJSON(`/units/${id}/officials`),
     fetchJSON(`/units/${id}/finances?years_back=3`),
+    fetchJSON(`/units/${id}/grade`),
   ]);
 
   if (!unit) {
@@ -46,6 +47,7 @@ export default async function UnitPage({
       officialsProvenance={officialsData?.provenance}
       years={financesData?.years || []}
       financesProvenance={financesData?.provenance}
+      grade={grade}
     />
   );
 }

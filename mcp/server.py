@@ -34,6 +34,8 @@ GEOCODER_RETRIES = 3
 GEOCODER_TIMEOUT_S = 10
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from financial_grade import build_township_grades, grade_for_unit  # noqa: E402
 
 GEOCODER = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
 COMPTROLLER_URL = "https://illinoiscomptroller.gov/constituent-services/local-government/local-government-warehouse"
@@ -457,6 +459,107 @@ def get_finances(unit_id: str, fiscal_year: int = None, years_back: int = 1) -> 
         "provenance": provenance(
             rows[0]["source_url"], f"FY{rows[0]['fiscal_year']}",
             note="Self-reported Annual Financial Report data; may contain filing errors."),
+    })
+
+
+def _township_grade_rows(conn) -> list[dict]:
+    rows = conn.execute("""
+        select u.id as unit_id, u.name, u.population,
+               a.fiscal_year, a.total_expenditures, a.total_revenues,
+               a.fund_balance, a.filed_on_time, a.fund_detail,
+               (select count(*) from afr_summaries x where x.unit_id = u.id) as afr_year_count,
+               (select count(*) from afr_summaries x
+                 where x.unit_id = u.id and x.filed_on_time is true) as on_time_count
+        from units u
+        left join afr_summaries a on a.unit_id = u.id
+        where u.type = 'township'
+        order by u.name, a.fiscal_year
+    """).fetchall()
+    out = []
+    for r in rows:
+        if r["fiscal_year"] is None:
+            out.append({
+                "unit_id": r["unit_id"], "name": r["name"], "population": r["population"],
+                "fiscal_year": 0, "total_expenditures": None, "total_revenues": None,
+                "fund_balance": None, "filed_on_time": None,
+                "expenditures_by_category": {}, "afr_year_count": 0, "on_time_count": 0,
+            })
+            continue
+        detail = r["fund_detail"] or {}
+        if isinstance(detail, str):
+            detail = json.loads(detail)
+        out.append({
+            "unit_id": r["unit_id"], "name": r["name"], "population": r["population"],
+            "fiscal_year": r["fiscal_year"],
+            "total_expenditures": r["total_expenditures"],
+            "total_revenues": r["total_revenues"],
+            "fund_balance": r["fund_balance"],
+            "filed_on_time": r["filed_on_time"],
+            "expenditures_by_category": detail.get("expenditures_by_category") or {},
+            "afr_year_count": r["afr_year_count"],
+            "on_time_count": r["on_time_count"],
+        })
+    return out
+
+
+@mcp.tool()
+def get_financial_grade(unit_id: str) -> dict:
+    """Get the peer-relative money-management grade for a Cook County township.
+
+    Grades (A–F) compare townships on filing compliance, reporting transparency,
+    program vs administration mix, fiscal reserves, and per-resident cost.
+    Based on Illinois Comptroller AFR filings — not an audit opinion. Always cite
+    the methodology limitations and fiscal year when presenting a grade.
+    """
+    with get_conn() as conn:
+        u = conn.execute("select id, name, type from units where id=%s", (unit_id,)).fetchone()
+        if not u:
+            return error_response("UNIT_NOT_FOUND", f"No unit '{unit_id}'.", "Use list_units to find ids.")
+        if u["type"] != "township":
+            log_usage("get_financial_grade", unit_id=unit_id)
+            return serialize({
+                "unit_id": unit_id, "name": u["name"], "type": u["type"],
+                "letter": None, "score": None,
+                "ungraded_reason": "Financial grades are currently computed for townships only.",
+                "provenance": provenance(COMPTROLLER_URL, certainty="extracted"),
+            })
+        rows = _township_grade_rows(conn)
+    bundle = build_township_grades(rows)
+    g = grade_for_unit(bundle, unit_id) or {
+        "unit_id": unit_id, "name": u["name"], "letter": None, "score": None,
+        "ungraded_reason": "No grade available.",
+    }
+    log_usage("get_financial_grade", unit_id=unit_id)
+    return serialize({
+        **g,
+        "provenance": provenance(
+            COMPTROLLER_URL,
+            f"FY{bundle['fiscal_year']}" if bundle.get("fiscal_year") else None,
+            certainty="extracted",
+            note="Peer-relative grade from self-reported AFR filings — not an audit opinion.",
+        ),
+    })
+
+
+@mcp.tool()
+def list_township_grades() -> dict:
+    """Rank all Cook County townships by money-management grade.
+
+    Returns letter grades, scores, dimension breakdowns, and methodology.
+    Use when comparing which townships manage money better or worse.
+    """
+    with get_conn() as conn:
+        rows = _township_grade_rows(conn)
+    bundle = build_township_grades(rows)
+    log_usage("list_township_grades", params={"fiscal_year": bundle.get("fiscal_year")})
+    return serialize({
+        **bundle,
+        "provenance": provenance(
+            COMPTROLLER_URL,
+            f"FY{bundle['fiscal_year']}" if bundle.get("fiscal_year") else None,
+            certainty="extracted",
+            note="Peer-relative grade from self-reported AFR filings — not an audit opinion.",
+        ),
     })
 
 

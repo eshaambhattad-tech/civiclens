@@ -6,6 +6,7 @@ import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { motion } from "framer-motion";
 import OfficialAvatar from "@/components/OfficialAvatar";
+import { GradeBadge, GradeCard } from "@/components/GradeBadge";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -43,6 +44,19 @@ interface Provenance {
   note?: string;
 }
 
+interface Grade {
+  letter: string | null;
+  score: number | null;
+  rank?: number;
+  peer_count?: number;
+  fiscal_year?: number;
+  dimensions?: Record<string, number>;
+  flags?: string[];
+  ungraded_reason?: string;
+  methodology?: { summary?: string; limitations?: string[] };
+  peer_median?: { score?: number | null };
+}
+
 interface Props {
   unit: {
     id: string;
@@ -59,6 +73,7 @@ interface Props {
   officialsProvenance?: Provenance;
   years: AFRYear[];
   financesProvenance?: Provenance;
+  grade?: Grade | null;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -74,8 +89,10 @@ export default function UnitDetail({
   officialsProvenance,
   years,
   financesProvenance,
+  grade,
 }: Props) {
   const headerRef = useRef<HTMLDivElement>(null);
+  const gradeRef = useRef<HTMLDivElement>(null);
   const officialsRef = useRef<HTMLElement>(null);
   const financesRef = useRef<HTMLElement>(null);
   const breakdownRef = useRef<HTMLElement>(null);
@@ -91,7 +108,7 @@ export default function UnitDetail({
     );
 
     // ScrollTrigger sections
-    const sections = [officialsRef, financesRef, breakdownRef, coverageRef];
+    const sections = [gradeRef, officialsRef, financesRef, breakdownRef, coverageRef];
     sections.forEach((ref) => {
       if (!ref.current) return;
       gsap.fromTo(
@@ -143,6 +160,11 @@ export default function UnitDetail({
           >
             {unit.type.replace("_", " ")}
           </span>
+          {grade?.letter && (
+            <div className="mt-1.5" title={`Money management grade ${grade.letter}`}>
+              <GradeBadge letter={grade.letter} size="md" />
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap gap-4 text-sm text-muted">
           {unit.population && (
@@ -187,6 +209,13 @@ export default function UnitDetail({
           )}
         </div>
       </div>
+
+      {/* Money management grade (townships) */}
+      {grade && unit.type === "township" && (
+        <div ref={gradeRef} style={{ opacity: 0 }}>
+          <GradeCard grade={grade} />
+        </div>
+      )}
 
       {/* Officials */}
       <section ref={officialsRef} className="mb-12" style={{ opacity: 0 }}>
